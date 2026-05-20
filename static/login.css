@@ -1,0 +1,173 @@
+* {
+  box-sizing: border-box;
+  font-family: "Segoe UI", Tahoma, sans-serif;
+}
+ 
+body {
+  margin: 0;
+  height: 100vh;
+  background: #0f0f10;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+ 
+.page {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+ 
+.card {
+  background: #f3f4f6;
+  width: 800px;
+  max-width: 95%;
+  height: 450px;
+  border-radius: 18px;
+  display: flex;
+  overflow: hidden;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
+}
+ 
+/* Left panel */
+.left-panel {
+  flex: 1;
+  position: relative;
+  background: #e5e7eb;
+  overflow: hidden;
+}
+ 
+/* Blobs */
+.blob {
+  position: absolute;
+  transition: transform 0.08s linear;
+  will-change: transform;
+  transform: translate3d(0, 0, 0); /* force GPU, no scale */
+}
+ 
+/* Shapes */
+.blob.purple {
+  width: 90px;
+  height: 140px;
+  background: #7c3aed;
+  border-radius: 20px;
+  top: 60px;
+  left: 120px;
+}
+ 
+.blob.black {
+  width: 70px;
+  height: 110px;
+  background: #3b82f6;
+  border-radius: 18px;
+  top: 120px;
+  left: 180px;
+}
+ 
+.blob.yellow {
+  width: 70px;
+  height: 120px;
+  background: #facc15;
+  border-radius: 40px 40px 20px 20px;
+  top: 140px;
+  left: 250px;
+}
+ 
+.blob.orange {
+  width: 170px;
+  height: 100px;
+  background: #fb923c;
+  border-radius: 60px;
+  bottom: 80px;
+  left: 120px;
+}
+ 
+/* Eyes */
+.eye {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  background: #111;
+  border-radius: 50%;
+  top: 40px;
+  transition: transform 0.08s linear;
+  will-change: transform;
+  transform: translate3d(0, 0, 0); /* no scaling */
+}
+ 
+.eye.left {
+  left: 25px;
+}
+.eye.right {
+  left: 45px;
+}
+ 
+/* Right panel */
+.right-panel {
+  flex: 1;
+  background: #ffffff;
+  padding: 50px 40px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+ 
+.right-panel h2 {
+  margin-bottom: 25px;
+  font-size: 28px;
+  color: #111827;
+}
+ 
+.field {
+  margin-bottom: 15px;
+}
+ 
+.field label {
+  font-size: 13px;
+  color: #374151;
+  display: block;
+  margin-bottom: 5px;
+}
+ 
+.field input {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #d1d5db;
+  font-size: 14px;
+  outline: none;
+}
+ 
+.login-btn {
+  margin-top: 10px;
+  padding: 12px;
+  width: 100%;
+  border: none;
+  border-radius: 10px;
+  background: #111827;
+  color: white;
+  font-size: 15px;
+  cursor: pointer;
+}
+ 
+.divider {
+  text-align: center;
+  margin: 20px 0;
+  color: #6b7280;
+  font-size: 13px;
+}
+ 
+.google-btn {
+  width: 100%;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid #d1d5db;
+  background: white;
+  cursor: pointer;
+}
+ 
+.google-btn img {
+  height: 18px;
+  vertical-align: middle;
+}

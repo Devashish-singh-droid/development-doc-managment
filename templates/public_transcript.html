@@ -1,0 +1,842 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Doc Management - Transcript Generator</title>
+    <link rel="icon" type="image/x-icon" href="{{ base_path }}/static/favicorn.ico" />
+    <link rel="icon" type="image/x-icon" sizes="32x32" href="{{ base_path }}/static/favicorn.ico" />
+    <link rel="icon" type="image/x-icon" sizes="96x96" href="{{ base_path }}/static/favicorn.ico" />
+    <link rel="icon" type="image/x-icon" sizes="128x128" href="{{ base_path }}/static/favicorn.ico" />
+    <link rel="icon" type="image/x-icon" sizes="192x192" href="{{ base_path }}/static/favicorn.ico" />
+    <link rel="apple-touch-icon" sizes="192x192" href="{{ base_path }}/static/favicorn.ico" />
+    <link rel="apple-touch-icon" sizes="256x256" href="{{ base_path }}/static/favicorn.ico" />
+    <style>
+        :root {
+            --brand-red: #e11d2e;
+            --brand-red-dark: #be123c;
+            --brand-orange: #f97316;
+            --brand-orange-deep: #ea580c;
+            --brand-bg: #fff7f2;
+            --brand-surface: #ffffff;
+            --brand-border: #ffd7c2;
+            --brand-text: #2b2b2b;
+            --brand-muted: #7a3312;
+            --brand-soft: #fff1e8;
+            --brand-shadow: rgba(190, 24, 60, 0.14);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+            min-height: 100vh;
+            background: radial-gradient(circle at top right, #fff1e8 0%, #fff8f4 48%, #ffffff 100%);
+            color: var(--brand-text);
+            position: relative;
+            overflow-x: hidden;
+        }
+
+        body::before {
+            content: "";
+            position: fixed;
+            inset: 0;
+            pointer-events: none;
+            background-image: url("{{ base_path }}/static/logo.png?v=20260309");
+            background-size: 220px auto;
+            background-repeat: repeat;
+            opacity: 0.03;
+            z-index: 0;
+        }
+
+        .page {
+            width: 100%;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 28px;
+            position: relative;
+            z-index: 1;
+        }
+
+        .card {
+            width: min(1460px, 100%);
+            min-height: 74vh;
+            display: grid;
+            grid-template-columns: minmax(300px, 0.72fr) minmax(760px, 1.65fr);
+            background: rgba(255, 255, 255, 0.95);
+            border: 1px solid var(--brand-border);
+            border-radius: 24px;
+            overflow: hidden;
+            box-shadow: 0 22px 60px var(--brand-shadow);
+            backdrop-filter: blur(8px);
+        }
+
+        .left-panel {
+            position: relative;
+            padding: 34px;
+            color: #ffffff;
+            background: linear-gradient(160deg, #fb7185 0%, #f43f5e 38%, #fb923c 100%);
+            overflow: hidden;
+        }
+
+        .left-panel::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background-image: url("{{ base_path }}/static/logo.png?v=20260309");
+            background-size: 240px auto;
+            background-repeat: no-repeat;
+            background-position: center 34px;
+            opacity: 0.08;
+            pointer-events: none;
+        }
+
+        .left-brand {
+            position: relative;
+            z-index: 1;
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 14px;
+            border-radius: 14px;
+            background: rgba(255, 255, 255, 0.92);
+            color: var(--brand-muted);
+            border: 1px solid rgba(255, 255, 255, 0.6);
+            box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
+        }
+
+        .left-brand img {
+            width: 30px;
+            height: 30px;
+            object-fit: contain;
+        }
+
+        .left-brand span {
+            font-size: 13px;
+            font-weight: 700;
+            letter-spacing: 0.3px;
+        }
+
+        .hero-copy {
+            position: relative;
+            z-index: 1;
+            margin-top: 72px;
+            max-width: 500px;
+        }
+
+        .eyebrow {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            border-radius: 999px;
+            background: rgba(255, 255, 255, 0.16);
+            border: 1px solid rgba(255, 255, 255, 0.26);
+            font-size: 13px;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            margin-bottom: 18px;
+        }
+
+        .hero-copy h1 {
+            font-size: clamp(38px, 4.2vw, 58px);
+            line-height: 1.02;
+            margin-bottom: 16px;
+        }
+
+        .hero-copy p {
+            font-size: 18px;
+            line-height: 1.75;
+            color: rgba(255, 255, 255, 0.9);
+            margin-bottom: 28px;
+        }
+
+        .feature-list {
+            list-style: none;
+            display: grid;
+            gap: 14px;
+        }
+
+        .feature-list li {
+            display: flex;
+            gap: 12px;
+            align-items: flex-start;
+            padding: 14px 16px;
+            border-radius: 16px;
+            background: rgba(255, 255, 255, 0.14);
+            border: 1px solid rgba(255, 255, 255, 0.16);
+            backdrop-filter: blur(10px);
+        }
+
+        .feature-icon {
+            width: 36px;
+            height: 36px;
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.2);
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            flex-shrink: 0;
+        }
+
+        .feature-text strong {
+            display: block;
+            font-size: 17px;
+            margin-bottom: 4px;
+        }
+
+        .feature-text span {
+            font-size: 15px;
+            line-height: 1.65;
+            color: rgba(255, 255, 255, 0.82);
+        }
+
+        .orb {
+            position: absolute;
+            border-radius: 999px;
+            filter: blur(6px);
+            opacity: 0.28;
+        }
+
+        .orb.one {
+            right: 28px;
+            top: 80px;
+            width: 118px;
+            height: 118px;
+            background: #ffd7c2;
+        }
+
+        .orb.two {
+            left: -20px;
+            bottom: 70px;
+            width: 180px;
+            height: 180px;
+            background: #fecaca;
+        }
+
+        .right-panel {
+            padding: 30px 34px;
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.96) 0%, #fff8f4 100%);
+            display: flex;
+            flex-direction: column;
+            gap: 18px;
+        }
+
+        .top-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+
+        .title-block h2 {
+            font-size: 36px;
+            color: var(--brand-red-dark);
+            margin-bottom: 8px;
+        }
+
+        .title-block p {
+            color: var(--brand-muted);
+            font-size: 17px;
+            line-height: 1.7;
+            max-width: 680px;
+        }
+
+        .logo-shell {
+            width: 78px;
+            height: 78px;
+            padding: 8px;
+            border-radius: 18px;
+            background: #ffffff;
+            border: 1px solid var(--brand-border);
+            box-shadow: 0 10px 24px rgba(190, 24, 60, 0.12);
+            flex-shrink: 0;
+        }
+
+        .logo-shell img {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }
+
+        .workspace {
+            display: grid;
+            grid-template-columns: minmax(250px, 0.72fr) minmax(0, 1.82fr);
+            gap: 18px;
+            flex: 1;
+            min-height: 0;
+        }
+
+        .panel {
+            background: rgba(255, 255, 255, 0.96);
+            border: 1px solid var(--brand-border);
+            border-radius: 20px;
+            padding: 20px;
+            box-shadow: 0 12px 28px rgba(190, 24, 60, 0.08);
+        }
+
+        .panel h3 {
+            font-size: 22px;
+            color: #3b160d;
+            margin-bottom: 8px;
+        }
+
+        .panel-subtitle {
+            color: #8a5a45;
+            font-size: 15px;
+            line-height: 1.7;
+            margin-bottom: 18px;
+        }
+
+        .upload-area {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            border: 2px dashed var(--brand-orange);
+            border-radius: 18px;
+            background: linear-gradient(180deg, #fff8f3 0%, #fff1e8 100%);
+            min-height: 210px;
+            padding: 24px 20px;
+            text-align: center;
+            transition: border-color 0.25s ease, transform 0.25s ease, box-shadow 0.25s ease;
+            cursor: pointer;
+        }
+
+        .upload-area:hover,
+        .upload-area.dragover {
+            border-color: var(--brand-red);
+            transform: translateY(-2px);
+            box-shadow: 0 14px 28px rgba(190, 24, 60, 0.12);
+        }
+
+        .upload-area input {
+            position: absolute;
+            inset: 0;
+            opacity: 0;
+            cursor: pointer;
+        }
+
+        .upload-icon {
+            width: 62px;
+            height: 62px;
+            margin: 0 auto 14px;
+            border-radius: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, var(--brand-red) 0%, var(--brand-orange) 100%);
+            color: white;
+            font-size: 26px;
+            box-shadow: 0 12px 28px rgba(190, 24, 60, 0.2);
+        }
+
+        .upload-area strong {
+            display: block;
+            font-size: 20px;
+            color: #431407;
+            margin-bottom: 6px;
+        }
+
+        .upload-area span {
+            display: block;
+            font-size: 15px;
+            line-height: 1.7;
+            color: #8a5a45;
+        }
+
+        .selected-file {
+            margin-top: 16px;
+            padding: 12px 14px;
+            border-radius: 14px;
+            background: #fff5ef;
+            border: 1px solid var(--brand-border);
+            color: var(--brand-muted);
+            font-size: 15px;
+            min-height: 44px;
+        }
+
+        .status-box {
+            margin-top: 16px;
+            padding: 14px 16px;
+            border-radius: 14px;
+            border: 1px solid var(--brand-border);
+            background: #fff8f3;
+            color: var(--brand-muted);
+            font-size: 15px;
+            line-height: 1.65;
+        }
+
+        .status-box.loading {
+            background: #fff1e8;
+            border-color: #fdba74;
+            color: #9a3412;
+        }
+
+        .status-box.success {
+            background: #f0fdf4;
+            border-color: #86efac;
+            color: #166534;
+        }
+
+        .status-box.error {
+            background: #fef2f2;
+            border-color: #fca5a5;
+            color: #b91c1c;
+        }
+
+        .button-row {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin-top: 18px;
+        }
+
+        .btn {
+            border: none;
+            border-radius: 12px;
+            padding: 14px 22px;
+            font-size: 15px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+        }
+
+        .btn:hover {
+            transform: translateY(-1px);
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--brand-red) 0%, var(--brand-orange) 100%);
+            color: white;
+            box-shadow: 0 12px 24px rgba(190, 24, 60, 0.18);
+        }
+
+        .btn-primary:hover {
+            background: linear-gradient(135deg, var(--brand-red-dark) 0%, var(--brand-orange-deep) 100%);
+        }
+
+        .btn-secondary {
+            background: #fff1e8;
+            color: var(--brand-red-dark);
+            border: 1px solid var(--brand-border);
+        }
+
+        .btn:disabled {
+            opacity: 0.7;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .tips-grid {
+            display: grid;
+            gap: 12px;
+            margin-top: 18px;
+        }
+
+        .tip-card {
+            padding: 14px 15px;
+            border-radius: 16px;
+            background: linear-gradient(180deg, #fff7f2 0%, #ffffff 100%);
+            border: 1px solid #ffe0cf;
+        }
+
+        .tip-card strong {
+            display: block;
+            color: #7c2d12;
+            font-size: 15px;
+            margin-bottom: 4px;
+        }
+
+        .tip-card span {
+            display: block;
+            color: #8a5a45;
+            font-size: 14px;
+            line-height: 1.7;
+        }
+
+        .transcript-panel {
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+        }
+
+        .transcript-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 16px;
+            flex-wrap: wrap;
+        }
+
+        .transcript-meta {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            border-radius: 999px;
+            background: var(--brand-soft);
+            color: var(--brand-muted);
+            border: 1px solid var(--brand-border);
+            font-size: 13px;
+            font-weight: 700;
+        }
+
+        textarea {
+            width: 100%;
+            flex: 1;
+            min-height: 400px;
+            resize: none;
+            border: 1px solid var(--brand-border);
+            border-radius: 18px;
+            padding: 20px 22px;
+            background: linear-gradient(180deg, #ffffff 0%, #fffaf7 100%);
+            color: var(--brand-text);
+            font-size: 17px;
+            line-height: 1.85;
+            outline: none;
+            box-shadow: inset 0 1px 3px rgba(15, 23, 42, 0.04);
+        }
+
+        textarea:focus {
+            border-color: var(--brand-orange);
+            box-shadow: 0 0 0 4px rgba(249, 115, 22, 0.14);
+        }
+
+        .helper-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            margin-top: 14px;
+            flex-wrap: wrap;
+        }
+
+        .helper-text {
+            color: #8a5a45;
+            font-size: 14px;
+        }
+
+        .helper-actions {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        @media (max-width: 980px) {
+            .card {
+                grid-template-columns: 1fr;
+                min-height: auto;
+            }
+
+            .left-panel {
+                min-height: 360px;
+            }
+
+            .workspace {
+                grid-template-columns: 1fr;
+            }
+
+            textarea {
+                min-height: 300px;
+            }
+        }
+
+        @media (max-width: 640px) {
+            .page {
+                padding: 14px;
+            }
+
+            .left-panel,
+            .right-panel {
+                padding: 24px;
+            }
+
+            .hero-copy {
+                margin-top: 48px;
+            }
+
+            .hero-copy h1 {
+                font-size: 32px;
+            }
+
+            .button-row,
+            .helper-actions {
+                flex-direction: column;
+            }
+
+            .btn {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="page">
+        <div class="card">
+            <aside class="left-panel">
+                <div class="left-brand">
+                    <img src="{{ base_path }}/static/logo.png?v=20260309" alt="Logo">
+                    <span>AI Doc Management</span>
+                </div>
+
+                <div class="hero-copy">
+                    <div class="eyebrow">Public Transcript Studio</div>
+                    <h1>Turn spoken video, PDF and image into polished, readable text.</h1>
+                    <p>
+                        Experience our transcription capabilities firsthand and see how accurately and efficiently we can convert video content into clear, usable text
+                    </p>
+
+                    <ul class="feature-list">
+                        <li>
+                            <div class="feature-icon">🎬</div>
+                            <div class="feature-text">
+                                <strong>Fast upload flow</strong>
+                                <span>Select a video, send it for processing, and keep everything in one focused workspace.</span>
+                            </div>
+                        </li>
+                        <li>
+                            <div class="feature-icon">📝</div>
+                            <div class="feature-text">
+                                <strong>Readable transcript view</strong>
+                                <span>Generated content appears in a larger editor panel designed for quick review, copy, and cleanup.</span>
+                            </div>
+                        </li>
+                        <li>
+                            <div class="feature-icon">✨</div>
+                            <div class="feature-text">
+                                <strong>Same brand, better feel</strong>
+                                <span>Built to align seamlessly with the Megamax experience, maintaining the same trusted identity and polished feel users already recognize.</span>
+                            </div>
+                        </li>
+                    </ul>
+                </div>
+
+                <div class="orb one"></div>
+                <div class="orb two"></div>
+            </aside>
+
+            <main class="right-panel">
+                <div class="top-row">
+                    <div class="title-block">
+                        <h2>Transcript Generator</h2>
+                        <p>Upload a video file and generate a public transcript in the same branded experience used across the rest of the application.</p>
+                    </div>
+                    <div class="logo-shell">
+                        <img src="{{ base_path }}/static/logo.png?v=20260309" alt="AI Doc Management logo">
+                    </div>
+                </div>
+
+                <div class="workspace">
+                    <section class="panel">
+                        <h3>Upload Video</h3>
+                        <p class="panel-subtitle">Choose any supported video file, then generate a transcript with one click.</p>
+
+                        <label class="upload-area" id="uploadArea">
+                            <input type="file" id="videoFile">
+                            <div class="upload-icon">↑</div>
+                            <strong>Drop your video here or click to browse</strong>
+                            <span>Supported formats are videos,PDF and images.</span>
+                        </label>
+
+                        <div class="selected-file" id="selectedFile">No video selected yet.</div>
+                        <div class="status-box" id="statusBox">Upload a file to begin generating the transcript.</div>
+
+                        <div class="button-row">
+                            <button class="btn btn-primary" id="generateBtn" onclick="uploadVideo()">Generate Transcript</button>
+                            <button class="btn btn-secondary" type="button" id="clearBtn">Clear</button>
+                        </div>
+
+                        <div class="tips-grid">
+                            <div class="tip-card">
+                                <strong>Best results</strong>
+                                <span>Use clear videos with audible speech, sharp PDFs, and high-quality images for cleaner transcript output.</span>
+                                <strong>Review faster</strong>
+                                <span>Once generated, you can copy the transcript directly from the editor panel on the right.</span>
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="panel transcript-panel">
+                        <div class="transcript-header">
+                            <div>
+                                <h3>Transcript</h3>
+                                <p class="panel-subtitle">Generated text appears here after processing completes.</p>
+                            </div>
+                            <div class="transcript-meta" id="transcriptMeta">Awaiting transcript</div>
+                        </div>
+
+                        <textarea id="output" placeholder="Transcript will appear here..." spellcheck="false"></textarea>
+
+                        <div class="helper-row">
+                            <div class="helper-text" id="wordCount">0 words</div>
+                            <div class="helper-actions">
+                                <button class="btn btn-secondary" type="button" id="copyBtn">Copy Transcript</button>
+                            </div>
+                        </div>
+                    </section>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <script>
+        const BASE_PATH = {{ base_path | tojson }};
+
+        function withBasePath(path = "") {
+            const rawPath = String(path || "");
+            if (!rawPath) return BASE_PATH || "/";
+            if (/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(rawPath)) {
+                return rawPath;
+            }
+            if (!BASE_PATH) {
+                return rawPath;
+            }
+            if (rawPath === BASE_PATH || rawPath.startsWith(`${BASE_PATH}/`)) {
+                return rawPath;
+            }
+            if (rawPath === "/") {
+                return `${BASE_PATH}/`;
+            }
+            if (rawPath.startsWith("/")) {
+                return `${BASE_PATH}${rawPath}`;
+            }
+            return `${BASE_PATH}/${rawPath.replace(/^\/+/, "")}`;
+        }
+
+        const videoInput = document.getElementById("videoFile");
+        const output = document.getElementById("output");
+        const selectedFile = document.getElementById("selectedFile");
+        const statusBox = document.getElementById("statusBox");
+        const transcriptMeta = document.getElementById("transcriptMeta");
+        const generateBtn = document.getElementById("generateBtn");
+        const clearBtn = document.getElementById("clearBtn");
+        const copyBtn = document.getElementById("copyBtn");
+        const uploadArea = document.getElementById("uploadArea");
+        const wordCount = document.getElementById("wordCount");
+
+        function setStatus(message, mode) {
+            statusBox.textContent = message;
+            statusBox.className = "status-box";
+            if (mode) {
+                statusBox.classList.add(mode);
+            }
+        }
+
+        function refreshWordCount() {
+            const text = output.value.trim();
+            const count = text ? text.split(/\s+/).length : 0;
+            wordCount.textContent = `${count} word${count === 1 ? "" : "s"}`;
+        }
+
+        function setSelectedFile(file) {
+            if (!file) {
+                selectedFile.textContent = "No video selected yet.";
+                transcriptMeta.textContent = "Awaiting transcript";
+                return;
+            }
+
+            const sizeMb = (file.size / (1024 * 1024)).toFixed(2);
+            selectedFile.textContent = `Selected: ${file.name} (${sizeMb} MB)`;
+            transcriptMeta.textContent = "File ready for processing";
+            setStatus("Video selected successfully. Click Generate Transcript to continue.", "success");
+        }
+
+        async function uploadVideo() {
+            const file = videoInput.files[0];
+
+            if (!file) {
+                setStatus("Please select a video before generating the transcript.", "error");
+                alert("Please select a video");
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append("file", file);
+
+            generateBtn.disabled = true;
+            transcriptMeta.textContent = "Generating transcript";
+            setStatus(`Processing "${file.name}". This can take a little while for larger videos.`, "loading");
+
+            try {
+                const res = await fetch(withBasePath("/generate-transcript"), {
+                    method: "POST",
+                    body: formData
+                });
+
+                const data = await res.json();
+
+                if (!res.ok) {
+                    throw new Error(data.detail || data.error || "Transcript generation failed");
+                }
+
+                output.value = data.transcript || "";
+                refreshWordCount();
+                transcriptMeta.textContent = output.value ? "Transcript generated" : "Completed with empty output";
+                setStatus("Transcript generated successfully. Review or copy it from the panel on the right.", "success");
+            } catch (error) {
+                transcriptMeta.textContent = "Generation failed";
+                setStatus(error.message || "Something went wrong while generating the transcript.", "error");
+            } finally {
+                generateBtn.disabled = false;
+            }
+        }
+
+        videoInput.addEventListener("change", () => {
+            setSelectedFile(videoInput.files[0]);
+        });
+
+        output.addEventListener("input", refreshWordCount);
+
+        clearBtn.addEventListener("click", () => {
+            videoInput.value = "";
+            output.value = "";
+            refreshWordCount();
+            setSelectedFile(null);
+            setStatus("Workspace cleared. Upload another video whenever you're ready.", "");
+        });
+
+        copyBtn.addEventListener("click", async () => {
+            if (!output.value.trim()) {
+                setStatus("There is no transcript to copy yet.", "error");
+                return;
+            }
+
+            try {
+                await navigator.clipboard.writeText(output.value);
+                setStatus("Transcript copied to clipboard.", "success");
+            } catch (error) {
+                setStatus("Copy failed in this browser. You can still select and copy the text manually.", "error");
+            }
+        });
+
+        ["dragenter", "dragover"].forEach((eventName) => {
+            uploadArea.addEventListener(eventName, (event) => {
+                event.preventDefault();
+                uploadArea.classList.add("dragover");
+            });
+        });
+
+        ["dragleave", "drop"].forEach((eventName) => {
+            uploadArea.addEventListener(eventName, (event) => {
+                event.preventDefault();
+                uploadArea.classList.remove("dragover");
+            });
+        });
+
+        refreshWordCount();
+    </script>
+</body>
+</html>

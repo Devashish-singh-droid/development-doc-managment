@@ -1,0 +1,1829 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>AI Doc Management - Login</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/x-icon" href="{{ base_path }}/static/favicorn.ico" />
+    <link rel="icon" type="image/x-icon" sizes="32x32" href="{{ base_path }}/static/favicorn.ico" />
+    <link rel="icon" type="image/x-icon" sizes="96x96" href="{{ base_path }}/static/favicorn.ico" />
+    <link rel="icon" type="image/x-icon" sizes="128x128" href="{{ base_path }}/static/favicorn.ico" />
+    <link rel="icon" type="image/x-icon" sizes="192x192" href="{{ base_path }}/static/favicorn.ico" />
+    <link rel="apple-touch-icon" sizes="192x192" href="{{ base_path }}/static/favicorn.ico" />
+    <link rel="apple-touch-icon" sizes="256x256" href="{{ base_path }}/static/favicorn.ico" />
+    <style>
+      :root {
+        --bg: #fff8f3;
+        --bg-warm: #ffe7d6;
+        --text: #1f1b1a;
+        --muted: #78675f;
+        --panel: rgba(255, 255, 255, 0.78);
+        --panel-strong: rgba(255, 255, 255, 0.92);
+        --line: rgba(236, 142, 88, 0.22);
+        --brand-red: #ef3e23;
+        --brand-orange: #ff8a34;
+        --brand-gold: #ffc857;
+        --hero-a: #ff652d;
+        --hero-b: #ff8b38;
+        --hero-c: #ffbf5f;
+        --hero-d: #ffefe2;
+        --shadow: 0 30px 80px rgba(178, 79, 27, 0.18);
+        --shadow-soft: 0 16px 40px rgba(214, 106, 36, 0.12);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        color: var(--text);
+        background:
+          radial-gradient(circle at 10% 20%, rgba(255, 186, 140, 0.44), transparent 26%),
+          radial-gradient(circle at 92% 14%, rgba(255, 128, 72, 0.24), transparent 18%),
+          radial-gradient(circle at 15% 92%, rgba(255, 212, 136, 0.22), transparent 20%),
+          linear-gradient(135deg, #fff8f3 0%, #fffdfb 52%, #fff2e7 100%);
+      }
+
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        background-image: url("{{ base_path }}/static/logo.png?v=20260309");
+        background-size: 300px auto;
+        background-repeat: repeat;
+        opacity: 0.026;
+      }
+
+      body.modal-open {
+        overflow: hidden;
+      }
+
+      .login-scene {
+        position: relative;
+        min-height: 100vh;
+        padding: 10px;
+        display: grid;
+        place-items: center;
+        overflow: hidden;
+      }
+
+      .ambient {
+        position: absolute;
+        border-radius: 999px;
+        filter: blur(10px);
+        pointer-events: none;
+        animation: floatBlob 10s ease-in-out infinite;
+      }
+
+      .ambient.one {
+        width: 320px;
+        height: 320px;
+        left: -70px;
+        top: 80px;
+        background: radial-gradient(circle, rgba(255, 168, 101, 0.42), rgba(255, 168, 101, 0));
+      }
+
+      .ambient.two {
+        width: 380px;
+        height: 380px;
+        right: -120px;
+        bottom: 40px;
+        background: radial-gradient(circle, rgba(255, 110, 54, 0.3), rgba(255, 110, 54, 0));
+        animation-delay: -3s;
+      }
+
+      .ambient.three {
+        width: 220px;
+        height: 220px;
+        right: 22%;
+        top: 8%;
+        background: radial-gradient(circle, rgba(255, 202, 115, 0.25), rgba(255, 202, 115, 0));
+        animation-delay: -6s;
+      }
+
+      .login-shell {
+        position: relative;
+        z-index: 1;
+        width: min(1640px, calc(100vw - 20px));
+        min-height: calc(100vh - 20px);
+        display: grid;
+        grid-template-columns: minmax(560px, 0.95fr) minmax(760px, 1.05fr);
+        background: rgba(255, 255, 255, 0.55);
+        backdrop-filter: blur(20px);
+        border: 1px solid rgba(255, 255, 255, 0.58);
+        border-radius: 34px;
+        box-shadow: var(--shadow);
+        overflow: hidden;
+        margin: 0 auto;
+      }
+
+      .login-shell::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background:
+          linear-gradient(120deg, rgba(255, 255, 255, 0.18), transparent 34%),
+          linear-gradient(300deg, rgba(255, 255, 255, 0.14), transparent 26%);
+        pointer-events: none;
+      }
+
+      .auth-panel {
+        position: relative;
+        padding: 24px 34px 20px;
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-start;
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.76), rgba(255, 252, 249, 0.94));
+      }
+
+      .auth-topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+      }
+
+      .brand-row {
+        display: inline-flex;
+        align-items: center;
+        gap: 14px;
+        width: fit-content;
+        padding: 10px 14px;
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.86);
+        border: 1px solid rgba(238, 152, 96, 0.18);
+        box-shadow: 0 12px 28px rgba(222, 115, 56, 0.08);
+      }
+
+      .brand-row img {
+        width: 56px;
+        height: auto;
+        object-fit: contain;
+      }
+
+      .side-transcript-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        padding: 12px 18px;
+        border-radius: 16px;
+        min-height: 48px;
+        text-decoration: none;
+        font-size: 14px;
+        font-weight: 800;
+        letter-spacing: 0.02em;
+        color: #ffffff;
+        background: linear-gradient(120deg, #d62839 0%, #ef3e23 52%, #ff8a34 100%);
+        box-shadow: 0 16px 30px rgba(208, 51, 41, 0.2);
+        transition: transform 0.2s ease, box-shadow 0.2s ease, filter 0.2s ease;
+      }
+
+      .side-transcript-btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 20px 36px rgba(208, 51, 41, 0.24);
+        filter: saturate(1.04);
+      }
+
+      .brand-text {
+        display: grid;
+        gap: 4px;
+      }
+
+      .brand-text strong {
+        font-size: 15px;
+        letter-spacing: 0.04em;
+      }
+
+      .brand-text span {
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .auth-stack {
+        max-width: 500px;
+        width: 100%;
+        margin: 18px auto 0;
+        display: grid;
+        gap: 18px;
+      }
+
+      .eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        width: fit-content;
+        padding: 8px 14px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: #a34f20;
+        background: rgba(255, 232, 215, 0.8);
+        border: 1px solid rgba(245, 165, 112, 0.28);
+      }
+
+      .eyebrow::before {
+        content: "";
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: linear-gradient(135deg, var(--brand-red), var(--brand-orange));
+        box-shadow: 0 0 0 6px rgba(255, 127, 63, 0.14);
+      }
+
+      .auth-copy h1 {
+        margin: 0 0 10px;
+        font-size: clamp(2.05rem, 2.9vw, 3.15rem);
+        line-height: 0.98;
+        letter-spacing: -0.04em;
+      }
+
+      .auth-copy p {
+        margin: 0;
+        font-size: 0.94rem;
+        line-height: 1.62;
+        color: var(--muted);
+      }
+
+      .login-card {
+        position: relative;
+        padding: 22px;
+        border-radius: 26px;
+        background: var(--panel-strong);
+        border: 1px solid rgba(247, 176, 124, 0.22);
+        box-shadow: var(--shadow-soft);
+      }
+
+      .login-card::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        border-radius: inherit;
+        padding: 1px;
+        background: linear-gradient(145deg, rgba(255, 140, 78, 0.34), rgba(255, 255, 255, 0.4));
+        -webkit-mask:
+          linear-gradient(#fff 0 0) content-box,
+          linear-gradient(#fff 0 0);
+        -webkit-mask-composite: xor;
+        mask-composite: exclude;
+        pointer-events: none;
+      }
+
+      .login-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        margin-bottom: 20px;
+      }
+
+      .login-header h2 {
+        margin: 0;
+        font-size: 1.65rem;
+        letter-spacing: -0.03em;
+      }
+
+      .login-header p {
+        margin: 6px 0 0;
+        color: var(--muted);
+        font-size: 0.95rem;
+      }
+
+      .status-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 12px;
+        border-radius: 16px;
+        background: rgba(255, 245, 237, 0.95);
+        border: 1px solid rgba(247, 170, 123, 0.24);
+        font-size: 12px;
+        font-weight: 700;
+        color: #9a4b1f;
+        white-space: nowrap;
+        animation: pulseChip 2.8s ease-in-out infinite;
+      }
+
+      .status-chip::before {
+        content: "";
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #1fc78c;
+        box-shadow: 0 0 0 6px rgba(31, 199, 140, 0.12);
+      }
+
+      form {
+        display: grid;
+        gap: 14px;
+      }
+
+      .field {
+        display: grid;
+        gap: 8px;
+      }
+
+      .field label {
+        font-size: 13px;
+        font-weight: 700;
+        color: #8a4821;
+        letter-spacing: 0.02em;
+      }
+
+      .field-shell {
+        position: relative;
+      }
+
+      .field input {
+        width: 100%;
+        padding: 15px 16px;
+        border-radius: 18px;
+        border: 1px solid rgba(239, 155, 101, 0.18);
+        background: rgba(255, 255, 255, 0.94);
+        color: var(--text);
+        font-size: 15px;
+        outline: none;
+        transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+      }
+
+      .field input::placeholder {
+        color: #b49a8d;
+      }
+
+      .field input:focus {
+        border-color: rgba(255, 126, 63, 0.6);
+        box-shadow: 0 0 0 6px rgba(255, 138, 82, 0.12);
+        transform: translateY(-1px);
+      }
+
+      .toggle-password {
+        position: absolute;
+        top: 50%;
+        right: 12px;
+        transform: translateY(-50%);
+        border: none;
+        background: transparent;
+        color: #9f7d6f;
+        font-size: 13px;
+        font-weight: 700;
+        cursor: pointer;
+        padding: 8px 10px;
+        border-radius: 12px;
+      }
+
+      .toggle-password:hover {
+        background: rgba(255, 232, 218, 0.8);
+      }
+
+      .login-meta {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .remember {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .remember input {
+        width: 16px;
+        height: 16px;
+        accent-color: var(--brand-red);
+      }
+
+      .login-meta a {
+        color: #b45925;
+        font-weight: 700;
+        text-decoration: none;
+      }
+
+      .login-meta a:hover {
+        text-decoration: underline;
+      }
+
+      .link-btn {
+        border: none;
+        background: transparent;
+        color: #b45925;
+        font-weight: 700;
+        font-size: 13px;
+        padding: 0;
+        cursor: pointer;
+      }
+
+      .link-btn:hover {
+        text-decoration: underline;
+      }
+
+      .error-msg {
+        padding: 13px 14px;
+        border-radius: 16px;
+        border: 1px solid rgba(235, 87, 87, 0.25);
+        background: rgba(255, 240, 239, 0.96);
+        color: #b52e25;
+        font-size: 13px;
+        font-weight: 700;
+        box-shadow: 0 10px 26px rgba(210, 60, 54, 0.08);
+      }
+
+      .success-msg,
+      .modal-status {
+        padding: 13px 14px;
+        border-radius: 16px;
+        font-size: 13px;
+        font-weight: 700;
+        box-shadow: 0 10px 26px rgba(210, 60, 54, 0.08);
+      }
+
+      .success-msg,
+      .modal-status.success {
+        border: 1px solid rgba(30, 163, 110, 0.24);
+        background: rgba(238, 255, 248, 0.96);
+        color: #15744f;
+        box-shadow: 0 10px 26px rgba(41, 154, 96, 0.08);
+      }
+
+      .modal-status.error {
+        border: 1px solid rgba(235, 87, 87, 0.25);
+        background: rgba(255, 240, 239, 0.96);
+        color: #b52e25;
+      }
+
+      .inline-note {
+        margin: 0;
+        font-size: 13px;
+        line-height: 1.7;
+        color: var(--muted);
+      }
+
+      .button-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+
+      .secondary-btn {
+        border: 1px solid rgba(239, 155, 101, 0.28);
+        background: rgba(255, 249, 244, 0.98);
+        color: #8f4a20;
+        border-radius: 16px;
+        padding: 13px 16px;
+        font-size: 14px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      .secondary-btn:hover {
+        background: rgba(255, 240, 230, 0.98);
+      }
+
+      .login-btn {
+        position: relative;
+        overflow: hidden;
+        width: 100%;
+        border: none;
+        border-radius: 18px;
+        padding: 15px 18px;
+        background: linear-gradient(120deg, #ff5c2f 0%, #ff7a2f 48%, #ffad46 100%);
+        color: white;
+        font-size: 16px;
+        font-weight: 800;
+        letter-spacing: 0.02em;
+        cursor: pointer;
+        box-shadow: 0 18px 34px rgba(255, 109, 54, 0.28);
+        transition: transform 0.2s ease, box-shadow 0.2s ease, filter 0.2s ease;
+      }
+
+      .login-btn::before {
+        content: "";
+        position: absolute;
+        inset: -60% auto 0 -20%;
+        width: 42%;
+        transform: rotate(18deg);
+        background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.42), transparent);
+        animation: sheen 4s ease-in-out infinite;
+      }
+
+      .login-btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 24px 42px rgba(255, 109, 54, 0.34);
+        filter: saturate(1.06);
+      }
+
+      .trust-row {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .trust-pill {
+        position: relative;
+        padding: 11px 10px;
+        border-radius: 18px;
+        background: rgba(255, 247, 242, 0.9);
+        border: 1px solid rgba(243, 177, 136, 0.18);
+        text-align: center;
+        box-shadow: 0 10px 24px rgba(214, 106, 36, 0.08);
+        transition: transform 0.22s ease, box-shadow 0.22s ease, border-color 0.22s ease;
+        overflow: hidden;
+      }
+
+      .trust-pill::before {
+        content: "";
+        position: absolute;
+        inset: 0 auto 0 0;
+        width: 4px;
+        background: linear-gradient(180deg, #ff6e31 0%, #ffb54d 100%);
+      }
+
+      .trust-pill:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 18px 30px rgba(214, 106, 36, 0.14);
+        border-color: rgba(243, 146, 78, 0.28);
+      }
+
+      .trust-pill strong {
+        display: block;
+        font-size: 15px;
+      }
+
+      .trust-pill span {
+        display: block;
+        margin-top: 3px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .auth-footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        font-size: 12px;
+        color: var(--muted);
+        margin-top: auto;
+        padding-top: 14px;
+      }
+
+      .modal-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 30;
+        display: grid;
+        place-items: center;
+        padding: 18px;
+        background: rgba(25, 18, 13, 0.42);
+        backdrop-filter: blur(10px);
+      }
+
+      .modal-backdrop[hidden] {
+        display: none;
+      }
+
+      .modal-card {
+        width: min(540px, 100%);
+        max-height: min(92vh, 760px);
+        overflow: auto;
+        padding: 24px;
+        border-radius: 28px;
+        background: rgba(255, 255, 255, 0.98);
+        border: 1px solid rgba(246, 177, 127, 0.22);
+        box-shadow: 0 30px 60px rgba(73, 32, 8, 0.24);
+      }
+
+      .modal-topbar {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 16px;
+      }
+
+      .modal-topbar h3 {
+        margin: 0 0 6px;
+        font-size: 1.55rem;
+        letter-spacing: -0.03em;
+      }
+
+      .modal-topbar p {
+        margin: 0;
+        font-size: 0.95rem;
+        line-height: 1.7;
+        color: var(--muted);
+      }
+
+      .icon-btn {
+        border: none;
+        background: rgba(255, 242, 231, 0.95);
+        color: #9b5629;
+        width: 40px;
+        height: 40px;
+        border-radius: 14px;
+        font-size: 22px;
+        line-height: 1;
+        cursor: pointer;
+      }
+
+      .modal-steps {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 10px;
+        margin-bottom: 18px;
+      }
+
+      .step-pill {
+        padding: 11px 12px;
+        border-radius: 16px;
+        text-align: center;
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: #9d7867;
+        background: rgba(255, 246, 240, 0.98);
+        border: 1px solid rgba(241, 202, 178, 0.8);
+      }
+
+      .step-pill.active {
+        color: white;
+        background: linear-gradient(120deg, #ff5c2f 0%, #ff7a2f 48%, #ffad46 100%);
+        border-color: transparent;
+        box-shadow: 0 16px 28px rgba(255, 109, 54, 0.22);
+      }
+
+      .modal-form {
+        gap: 14px;
+      }
+
+      .modal-form[hidden] {
+        display: none;
+      }
+
+      .hero-panel {
+        position: relative;
+        overflow: hidden;
+        padding: 24px 34px 20px;
+        background:
+          radial-gradient(circle at 18% 18%, rgba(255, 245, 236, 0.24), transparent 24%),
+          linear-gradient(135deg, var(--hero-a) 0%, var(--hero-b) 38%, var(--hero-c) 100%);
+        color: white;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        isolation: isolate;
+      }
+
+      .hero-panel::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background:
+          linear-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+        background-size: 32px 32px;
+        opacity: 0.26;
+        mask-image: radial-gradient(circle at center, black 38%, transparent 100%);
+      }
+
+      .hero-orb {
+        position: absolute;
+        border-radius: 50%;
+        filter: blur(6px);
+        pointer-events: none;
+        opacity: 0.5;
+      }
+
+      .hero-orb.one {
+        width: 220px;
+        height: 220px;
+        top: -40px;
+        right: -40px;
+        background: radial-gradient(circle, rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0));
+      }
+
+      .hero-orb.two {
+        width: 280px;
+        height: 280px;
+        bottom: 18%;
+        left: -120px;
+        background: radial-gradient(circle, rgba(255, 214, 111, 0.22), rgba(255, 214, 111, 0));
+      }
+
+      .hero-top {
+        position: relative;
+        z-index: 1;
+      }
+
+      .hero-tag {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 18px;
+        padding: 9px 14px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: rgba(255, 255, 255, 0.92);
+        background: rgba(255, 255, 255, 0.12);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        backdrop-filter: blur(10px);
+        animation: pulseChip 3.2s ease-in-out infinite;
+      }
+
+      .hero-tag::before {
+        content: "";
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: white;
+        box-shadow: 0 0 0 5px rgba(255, 255, 255, 0.16);
+      }
+
+      .hero-panel h3 {
+        max-width: 560px;
+        margin: 0;
+        font-size: clamp(2.2rem, 3.7vw, 4rem);
+        line-height: 0.93;
+        letter-spacing: -0.05em;
+      }
+
+      .hero-panel p {
+        max-width: 560px;
+        margin: 14px 0 0;
+        font-size: 0.96rem;
+        line-height: 1.55;
+        color: rgba(255, 248, 243, 0.88);
+      }
+
+      .hero-points {
+        margin-top: 20px;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px 20px;
+      }
+
+      .hero-points span {
+        position: relative;
+        padding-left: 24px;
+        font-size: 0.88rem;
+        font-weight: 600;
+        color: rgba(255, 250, 245, 0.94);
+        line-height: 1.34;
+      }
+
+      .hero-points span::before {
+        content: "✓";
+        position: absolute;
+        left: 0;
+        top: -1px;
+        font-weight: 800;
+      }
+
+      .mock-wrap {
+        position: relative;
+        z-index: 1;
+        align-self: center;
+        width: min(560px, 100%);
+        margin-top: 20px;
+        perspective: 1600px;
+      }
+
+      .mock-board {
+        position: relative;
+        border-radius: 26px;
+        padding: 18px;
+        background: rgba(255, 253, 250, 0.94);
+        box-shadow: 0 36px 60px rgba(113, 34, 11, 0.24);
+        transform: rotateX(13deg) rotateY(-15deg) rotateZ(6deg);
+        transition: transform 0.25s ease;
+      }
+
+      .mock-board::after {
+        content: "";
+        position: absolute;
+        left: 5%;
+        right: 5%;
+        bottom: -22px;
+        height: 36px;
+        background: rgba(77, 19, 6, 0.32);
+        filter: blur(20px);
+        border-radius: 50%;
+        z-index: -1;
+      }
+
+      .mock-topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 18px;
+      }
+
+      .mock-brand {
+        width: 70px;
+        height: 20px;
+        border-radius: 999px;
+        background: linear-gradient(90deg, #ff7a2f, #ffb44e);
+      }
+
+      .mock-user {
+        width: 86px;
+        height: 18px;
+        border-radius: 999px;
+        background: rgba(229, 207, 197, 0.8);
+      }
+
+      .mock-stats {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 12px;
+        margin-bottom: 16px;
+      }
+
+      .mock-stat {
+        height: 74px;
+        border-radius: 18px;
+        position: relative;
+        overflow: hidden;
+      }
+
+      .mock-stat::after {
+        content: "";
+        position: absolute;
+        inset: auto -10% -30% auto;
+        width: 56px;
+        height: 56px;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.22);
+      }
+
+      .mock-stat.green {
+        background: linear-gradient(135deg, #16c7a3, #1abfbe);
+      }
+
+      .mock-stat.purple {
+        background: linear-gradient(135deg, #a27ce8, #8f74df);
+      }
+
+      .mock-stat.blue {
+        background: linear-gradient(135deg, #24aef3, #0b98ea);
+      }
+
+      .mock-stat.orange {
+        background: linear-gradient(135deg, #ff9875, #ff8a67);
+      }
+
+      .mock-main {
+        display: grid;
+        grid-template-columns: 1.35fr 0.8fr;
+        gap: 16px;
+      }
+
+      .mock-table,
+      .mock-side {
+        border-radius: 22px;
+        background: #fff;
+        border: 1px solid rgba(244, 215, 199, 0.9);
+      }
+
+      .mock-table {
+        padding: 14px;
+      }
+
+      .mock-table-title {
+        width: 110px;
+        height: 14px;
+        border-radius: 999px;
+        background: rgba(245, 198, 173, 0.9);
+        margin-bottom: 16px;
+      }
+
+      .mock-row {
+        display: grid;
+        grid-template-columns: 1.4fr 1fr 0.8fr 0.7fr;
+        gap: 10px;
+        margin-bottom: 11px;
+      }
+
+      .mock-cell {
+        height: 11px;
+        border-radius: 999px;
+        background: rgba(234, 224, 218, 0.95);
+      }
+
+      .mock-cell.short {
+        width: 70%;
+      }
+
+      .mock-side {
+        padding: 14px;
+        display: grid;
+        gap: 14px;
+      }
+
+      .mock-side-card {
+        padding: 12px;
+        border-radius: 18px;
+        background: rgba(255, 248, 243, 0.92);
+        border: 1px solid rgba(247, 223, 210, 0.92);
+      }
+
+      .mock-side-card .line {
+        height: 10px;
+        border-radius: 999px;
+        background: rgba(231, 211, 202, 0.9);
+      }
+
+      .mock-side-card .line + .line {
+        margin-top: 10px;
+      }
+
+      .mock-side-card .line.accent {
+        background: linear-gradient(90deg, #ff8b33, #ffb44d);
+      }
+
+      .hero-footer {
+        position: relative;
+        z-index: 1;
+        margin-top: 16px;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+
+      .hero-metric {
+        position: relative;
+        padding: 12px 14px;
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.12);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        backdrop-filter: blur(12px);
+        overflow: hidden;
+        transition: transform 0.22s ease, background 0.22s ease, border-color 0.22s ease;
+      }
+
+      .hero-metric::before {
+        content: "";
+        position: absolute;
+        inset: auto auto -40% -10%;
+        width: 90px;
+        height: 90px;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.08);
+      }
+
+      .hero-metric:hover {
+        transform: translateY(-3px);
+        background: rgba(255, 255, 255, 0.16);
+        border-color: rgba(255, 255, 255, 0.22);
+      }
+
+      .hero-metric strong {
+        display: block;
+        font-size: 1.02rem;
+        letter-spacing: -0.02em;
+      }
+
+      .hero-metric span {
+        display: block;
+        margin-top: 4px;
+        font-size: 11px;
+        color: rgba(255, 248, 242, 0.8);
+      }
+
+      .error-state .login-card {
+        animation: errorPulse 0.4s ease-in-out 2;
+      }
+
+      .error-state .auth-panel {
+        background: linear-gradient(180deg, rgba(255, 248, 247, 0.82), rgba(255, 252, 249, 0.94));
+      }
+
+      @keyframes floatBlob {
+        0%,
+        100% {
+          transform: translate3d(0, 0, 0);
+        }
+        50% {
+          transform: translate3d(0, -16px, 0);
+        }
+      }
+
+      @keyframes sheen {
+        0% {
+          left: -24%;
+        }
+        45%,
+        100% {
+          left: 128%;
+        }
+      }
+
+      @keyframes pulseChip {
+        0%,
+        100% {
+          transform: translateY(0);
+          box-shadow: 0 0 0 0 rgba(255, 255, 255, 0);
+        }
+        50% {
+          transform: translateY(-1px);
+          box-shadow: 0 10px 24px rgba(255, 176, 109, 0.16);
+        }
+      }
+
+      @keyframes errorPulse {
+        0%,
+        100% {
+          transform: translateX(0);
+        }
+        25% {
+          transform: translateX(-8px);
+        }
+        50% {
+          transform: translateX(8px);
+        }
+        75% {
+          transform: translateX(-5px);
+        }
+      }
+
+      @media (max-width: 1120px) {
+        .login-shell {
+          grid-template-columns: 1fr;
+          min-height: auto;
+        }
+
+        .hero-panel {
+          min-height: 560px;
+          order: -1;
+        }
+
+        .auth-panel {
+          padding-top: 28px;
+        }
+
+        .auth-topbar {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .hero-footer,
+        .trust-row {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+
+      @media (max-height: 980px) and (min-width: 1121px) {
+        .login-scene {
+          padding: 8px;
+        }
+
+        .login-shell {
+          width: min(1660px, calc(100vw - 16px));
+          min-height: calc(100vh - 16px);
+        }
+
+        .auth-panel,
+        .hero-panel {
+          padding-top: 18px;
+          padding-bottom: 16px;
+        }
+
+        .brand-row {
+          padding: 8px 12px;
+        }
+
+        .brand-row img {
+          width: 48px;
+        }
+
+        .auth-stack {
+          margin-top: 12px;
+          gap: 14px;
+        }
+
+        .auth-copy h1 {
+          font-size: clamp(1.9rem, 2.4vw, 2.8rem);
+        }
+
+        .auth-copy p,
+        .hero-panel p {
+          font-size: 0.9rem;
+          line-height: 1.45;
+        }
+
+        .login-card {
+          padding: 18px;
+        }
+
+        .hero-panel h3 {
+          font-size: clamp(1.95rem, 3vw, 3.15rem);
+        }
+
+        .hero-points {
+          gap: 10px 18px;
+        }
+
+        .hero-points span {
+          font-size: 0.82rem;
+        }
+
+        .mock-wrap {
+          width: min(470px, 100%);
+          margin-top: 12px;
+        }
+
+        .hero-footer {
+          margin-top: 12px;
+        }
+      }
+
+      @media (max-width: 820px) {
+        .login-scene {
+          padding: 18px;
+        }
+
+        .auth-panel,
+        .hero-panel {
+          padding: 24px;
+        }
+
+        .hero-points,
+        .hero-footer,
+        .trust-row,
+        .mock-stats,
+        .mock-main {
+          grid-template-columns: 1fr;
+        }
+
+        .hero-panel h3 {
+          font-size: clamp(2.2rem, 8vw, 3.4rem);
+        }
+
+        .login-meta,
+        .auth-footer,
+        .login-header {
+          flex-direction: column;
+          align-items: flex-start;
+        }
+
+        .modal-steps {
+          grid-template-columns: 1fr;
+        }
+
+        .button-row,
+        .modal-topbar {
+          flex-direction: column;
+          align-items: stretch;
+        }
+      }
+    </style>
+  </head>
+  <body class="{% if error %}error-state{% endif %}">
+    <div class="login-scene">
+      <div class="ambient one"></div>
+      <div class="ambient two"></div>
+      <div class="ambient three"></div>
+
+      <main class="login-shell">
+        <section class="auth-panel">
+          <div class="auth-topbar">
+            <div class="brand-row">
+              <img src="{{ base_path }}/static/logo.png?v=20260309" alt="Megamax Logo" />
+              <div class="brand-text">
+                <strong>MEGAMAX</strong>
+                <span>Governed Document Intelligence Workspace</span>
+              </div>
+            </div>
+            <a href="{{ base_path }}/public-transcript" class="side-transcript-btn">
+              <span aria-hidden="true">&#127909;</span>
+              <span>Transcript Tool</span>
+            </a>
+          </div>
+
+          <div class="auth-stack">
+            <div class="auth-copy">
+              <div class="eyebrow">Governed Access</div>
+              <h1>Step into the command layer for high-trust document operations.</h1>
+              <p>
+                Sign in to move through AI Buzz, duplicate-aware intake, employee-linked
+                records, audit visibility, and live processing queues from one refined workspace.
+              </p>
+            </div>
+
+            <div class="login-card">
+              <div class="login-header">
+                <div>
+                  <h2>Sign In</h2>
+                  <p>Use your workspace credentials to unlock the scope assigned to you.</p>
+                </div>
+                <div class="status-chip">Access Matrix Live</div>
+              </div>
+
+              <form action="{{ base_path }}/login" method="post">
+                <div class="field">
+                  <label for="username">Email Address</label>
+                  <div class="field-shell">
+                    <input
+                      id="username"
+                      type="text"
+                      name="username"
+                      placeholder="name@company.com"
+                      required
+                      autocomplete="username"
+                    />
+                  </div>
+                </div>
+
+                <div class="field">
+                  <label for="password">Password</label>
+                  <div class="field-shell">
+                    <input
+                      id="password"
+                      type="password"
+                      name="password"
+                      placeholder="Enter your password"
+                      required
+                      autocomplete="current-password"
+                    />
+                    <button type="button" class="toggle-password" id="togglePassword">
+                      Show
+                    </button>
+                  </div>
+                </div>
+
+                <div class="login-meta">
+                  <label class="remember">
+                    <input type="checkbox" />
+                    <span>Remember me</span>
+                  </label>
+                  <button type="button" class="link-btn" id="forgotPasswordTrigger">Forgot password?</button>
+                </div>
+
+                {% if error %}
+                <div class="error-msg">{{ error }}</div>
+                {% endif %}
+
+                <button type="submit" class="login-btn">Enter Secure Workspace</button>
+              </form>
+
+              <div class="trust-row">
+                <div class="trust-pill">
+                  <strong>RBAC + KBAC</strong>
+                  <span>Role and team-scoped visibility</span>
+                </div>
+                <div class="trust-pill">
+                  <strong>Duplicate Shield</strong>
+                  <span>Repeat intake blocked early</span>
+                </div>
+                <div class="trust-pill">
+                  <strong>Audit Timeline</strong>
+                  <span>Critical actions stay traceable</span>
+                </div>
+                <div class="trust-pill">
+                  <strong>Retention Control</strong>
+                  <span>Temporary or preserved by intent</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="modal-backdrop" id="forgotPasswordModal" hidden>
+              <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="forgotPasswordTitle">
+                <div class="modal-topbar">
+                  <div>
+                    <h3 id="forgotPasswordTitle">Reset your password</h3>
+                    <p>Verify your workspace email, enter the code we send, and choose a new password.</p>
+                  </div>
+                  <button type="button" class="icon-btn" id="closeForgotPassword" aria-label="Close password reset">
+                    ×
+                  </button>
+                </div>
+
+                <div class="modal-steps">
+                  <div class="step-pill active" data-step-indicator="request">1. Email</div>
+                  <div class="step-pill" data-step-indicator="verify">2. Code</div>
+                  <div class="step-pill" data-step-indicator="reset">3. Password</div>
+                </div>
+
+                <div id="forgotPasswordStatus" class="modal-status" hidden></div>
+
+                <form id="forgotPasswordRequestForm" class="modal-form" novalidate>
+                  <div class="field">
+                    <label for="forgotEmail">Email Address</label>
+                    <div class="field-shell">
+                      <input
+                        id="forgotEmail"
+                        type="email"
+                        placeholder="name@company.com"
+                        autocomplete="email"
+                        required
+                      />
+                    </div>
+                  </div>
+                  <p class="inline-note">
+                    We’ll send a 6-digit verification code to the email address linked with your account.
+                  </p>
+                  <button type="submit" class="login-btn">Send Verification Code</button>
+                </form>
+
+                <form id="forgotPasswordVerifyForm" class="modal-form" novalidate hidden>
+                  <div class="field">
+                    <label for="forgotVerifyEmail">Email Address</label>
+                    <div class="field-shell">
+                      <input id="forgotVerifyEmail" type="email" readonly />
+                    </div>
+                  </div>
+                  <div class="field">
+                    <label for="forgotOtp">Verification Code</label>
+                    <div class="field-shell">
+                      <input
+                        id="forgotOtp"
+                        type="text"
+                        inputmode="numeric"
+                        maxlength="6"
+                        placeholder="Enter 6-digit code"
+                        autocomplete="one-time-code"
+                        required
+                      />
+                    </div>
+                  </div>
+                  <p class="inline-note">
+                    Check your inbox and spam folder. You can request a fresh code if the earlier one expires.
+                  </p>
+                  <div class="button-row">
+                    <button type="submit" class="login-btn">Verify Code</button>
+                    <button type="button" class="secondary-btn" id="forgotResendButton">Resend Code</button>
+                  </div>
+                </form>
+
+                <form id="forgotPasswordResetForm" class="modal-form" novalidate hidden>
+                  <div class="field">
+                    <label for="forgotResetEmail">Email Address</label>
+                    <div class="field-shell">
+                      <input id="forgotResetEmail" type="email" readonly />
+                    </div>
+                  </div>
+                  <div class="field">
+                    <label for="forgotNewPassword">New Password</label>
+                    <div class="field-shell">
+                      <input
+                        id="forgotNewPassword"
+                        type="password"
+                        placeholder="Create a strong password"
+                        autocomplete="new-password"
+                        required
+                      />
+                      <button type="button" class="toggle-password" data-toggle-target="forgotNewPassword">
+                        Show
+                      </button>
+                    </div>
+                  </div>
+                  <div class="field">
+                    <label for="forgotConfirmPassword">Confirm New Password</label>
+                    <div class="field-shell">
+                      <input
+                        id="forgotConfirmPassword"
+                        type="password"
+                        placeholder="Re-enter new password"
+                        autocomplete="new-password"
+                        required
+                      />
+                      <button type="button" class="toggle-password" data-toggle-target="forgotConfirmPassword">
+                        Show
+                      </button>
+                    </div>
+                  </div>
+                  <p class="inline-note">
+                    Use at least 8 characters with uppercase, lowercase, a number, and a special character.
+                  </p>
+                  <button type="submit" class="login-btn">Update Password</button>
+                </form>
+              </div>
+            </div>
+          </div>
+
+          <div class="auth-footer">
+            <span>Copyright (c) 2026, Megamax AI</span>
+            <span>Designed for realistic, high-trust document workflows.</span>
+          </div>
+        </section>
+
+        <section class="hero-panel">
+          <div class="hero-orb one"></div>
+          <div class="hero-orb two"></div>
+
+          <div class="hero-top">
+            <div class="hero-tag">AI Buzz • RBAC • KBAC • Duplicate Shield</div>
+            <h3>Document intelligence that feels cinematic, but stays grounded in control.</h3>
+            <p>
+              Built for fast-moving teams that need protected access, clean intake,
+              searchable records, and confident operational visibility without exposing the machinery underneath.
+            </p>
+
+            <div class="hero-points">
+              <span>AI Buzz answers over saved business records</span>
+              <span>RBAC and KBAC keep access aligned to scope</span>
+              <span>Duplicate and fraud-risk protections cut noise early</span>
+              <span>OCR intake supports PDFs, images, office files, and video workflows</span>
+              <span>Microsoft 365 private-link import extends intake beyond local files</span>
+              <span>Audit visibility, retention rules, and employee-linked records stay in sync</span>
+            </div>
+          </div>
+
+          <div class="mock-wrap">
+            <div class="mock-board" id="mockBoard">
+              <div class="mock-topbar">
+                <div class="mock-brand"></div>
+                <div class="mock-user"></div>
+              </div>
+
+              <div class="mock-stats">
+                <div class="mock-stat green"></div>
+                <div class="mock-stat purple"></div>
+                <div class="mock-stat blue"></div>
+                <div class="mock-stat orange"></div>
+              </div>
+
+              <div class="mock-main">
+                <div class="mock-table">
+                  <div class="mock-table-title"></div>
+                  <div class="mock-row">
+                    <div class="mock-cell"></div>
+                    <div class="mock-cell"></div>
+                    <div class="mock-cell short"></div>
+                    <div class="mock-cell short"></div>
+                  </div>
+                  <div class="mock-row">
+                    <div class="mock-cell"></div>
+                    <div class="mock-cell"></div>
+                    <div class="mock-cell short"></div>
+                    <div class="mock-cell short"></div>
+                  </div>
+                  <div class="mock-row">
+                    <div class="mock-cell"></div>
+                    <div class="mock-cell"></div>
+                    <div class="mock-cell short"></div>
+                    <div class="mock-cell short"></div>
+                  </div>
+                  <div class="mock-row">
+                    <div class="mock-cell"></div>
+                    <div class="mock-cell"></div>
+                    <div class="mock-cell short"></div>
+                    <div class="mock-cell short"></div>
+                  </div>
+                </div>
+
+                <div class="mock-side">
+                  <div class="mock-side-card">
+                    <div class="line"></div>
+                    <div class="line accent"></div>
+                    <div class="line"></div>
+                  </div>
+                  <div class="mock-side-card">
+                    <div class="line"></div>
+                    <div class="line"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="hero-footer">
+            <div class="hero-metric">
+              <strong>AI Buzz</strong>
+              <span>Natural-language answers over your governed document base</span>
+            </div>
+            <div class="hero-metric">
+              <strong>Duplicate Shield</strong>
+              <span>Exact and near-repeat protections reduce rework</span>
+            </div>
+            <div class="hero-metric">
+              <strong>Audit Timeline</strong>
+              <span>Operational actions remain visible and reviewable</span>
+            </div>
+            <div class="hero-metric">
+              <strong>Smart Intake</strong>
+              <span>Uploads, link imports, manifests, and retention move together</span>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script>
+      const BASE_PATH = {{ base_path | tojson }};
+
+      function withBasePath(path = "") {
+        const rawPath = String(path || "");
+        if (!rawPath) return BASE_PATH || "/";
+        if (/^(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(rawPath)) {
+          return rawPath;
+        }
+        if (!BASE_PATH) {
+          return rawPath;
+        }
+        if (rawPath === BASE_PATH || rawPath.startsWith(`${BASE_PATH}/`)) {
+          return rawPath;
+        }
+        if (rawPath === "/") {
+          return `${BASE_PATH}/`;
+        }
+        if (rawPath.startsWith("/")) {
+          return `${BASE_PATH}${rawPath}`;
+        }
+        return `${BASE_PATH}/${rawPath.replace(/^\/+/, "")}`;
+      }
+
+      const usernameInput = document.getElementById("username");
+      const passwordInput = document.getElementById("password");
+      const mockBoard = document.getElementById("mockBoard");
+      const forgotPasswordTrigger = document.getElementById("forgotPasswordTrigger");
+      const forgotPasswordModal = document.getElementById("forgotPasswordModal");
+      const closeForgotPassword = document.getElementById("closeForgotPassword");
+      const forgotPasswordStatus = document.getElementById("forgotPasswordStatus");
+      const forgotPasswordRequestForm = document.getElementById("forgotPasswordRequestForm");
+      const forgotPasswordVerifyForm = document.getElementById("forgotPasswordVerifyForm");
+      const forgotPasswordResetForm = document.getElementById("forgotPasswordResetForm");
+      const forgotEmailInput = document.getElementById("forgotEmail");
+      const forgotVerifyEmailInput = document.getElementById("forgotVerifyEmail");
+      const forgotResetEmailInput = document.getElementById("forgotResetEmail");
+      const forgotOtpInput = document.getElementById("forgotOtp");
+      const forgotNewPasswordInput = document.getElementById("forgotNewPassword");
+      const forgotConfirmPasswordInput = document.getElementById("forgotConfirmPassword");
+      const forgotResendButton = document.getElementById("forgotResendButton");
+      const forgotPasswordState = {
+        email: "",
+        resetToken: "",
+      };
+
+      function togglePasswordInput(targetId, triggerButton) {
+        const targetInput = document.getElementById(targetId);
+        if (!targetInput || !triggerButton) return;
+        const isPassword = targetInput.type === "password";
+        targetInput.type = isPassword ? "text" : "password";
+        triggerButton.textContent = isPassword ? "Hide" : "Show";
+      }
+
+      document.querySelectorAll(".toggle-password").forEach((button) => {
+        button.addEventListener("click", () => {
+          const targetId = button.dataset.toggleTarget || "password";
+          togglePasswordInput(targetId, button);
+        });
+      });
+
+      function setForgotPasswordStatus(message, type = "success") {
+        if (!forgotPasswordStatus) return;
+        if (!message) {
+          forgotPasswordStatus.hidden = true;
+          forgotPasswordStatus.textContent = "";
+          forgotPasswordStatus.className = "modal-status";
+          return;
+        }
+        forgotPasswordStatus.hidden = false;
+        forgotPasswordStatus.textContent = message;
+        forgotPasswordStatus.className = "modal-status " + type;
+      }
+
+      function syncForgotPasswordEmail(email = "") {
+        forgotPasswordState.email = String(email || "").trim().toLowerCase();
+        if (forgotEmailInput && document.activeElement !== forgotEmailInput) {
+          forgotEmailInput.value = forgotPasswordState.email;
+        }
+        if (forgotVerifyEmailInput) {
+          forgotVerifyEmailInput.value = forgotPasswordState.email;
+        }
+        if (forgotResetEmailInput) {
+          forgotResetEmailInput.value = forgotPasswordState.email;
+        }
+      }
+
+      function showForgotPasswordStep(step) {
+        const forms = {
+          request: forgotPasswordRequestForm,
+          verify: forgotPasswordVerifyForm,
+          reset: forgotPasswordResetForm,
+        };
+        Object.entries(forms).forEach(([key, element]) => {
+          if (!element) return;
+          element.hidden = key !== step;
+        });
+        document.querySelectorAll("[data-step-indicator]").forEach((element) => {
+          element.classList.toggle("active", element.dataset.stepIndicator === step);
+        });
+      }
+
+      function resetForgotPasswordFlow(options = {}) {
+        const preserveEmail = options.preserveEmail === true;
+        if (!preserveEmail) {
+          forgotPasswordState.email = "";
+        }
+        forgotPasswordState.resetToken = "";
+        forgotPasswordRequestForm?.reset();
+        forgotPasswordVerifyForm?.reset();
+        forgotPasswordResetForm?.reset();
+        syncForgotPasswordEmail(
+          preserveEmail
+            ? forgotPasswordState.email
+            : (usernameInput?.value || "").trim().toLowerCase()
+        );
+        showForgotPasswordStep("request");
+        setForgotPasswordStatus("");
+      }
+
+      function openForgotPasswordModal() {
+        if (!forgotPasswordModal) return;
+        resetForgotPasswordFlow({ preserveEmail: false });
+        forgotPasswordModal.hidden = false;
+        document.body.classList.add("modal-open");
+        window.setTimeout(() => forgotEmailInput?.focus(), 20);
+      }
+
+      function closeForgotPasswordModalFlow() {
+        if (!forgotPasswordModal) return;
+        forgotPasswordModal.hidden = true;
+        document.body.classList.remove("modal-open");
+        setForgotPasswordStatus("");
+      }
+
+      async function postJson(url, payload) {
+        const response = await fetch(url, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(data.detail || "Something went wrong. Please try again.");
+        }
+        return data;
+      }
+
+      forgotPasswordTrigger?.addEventListener("click", openForgotPasswordModal);
+      closeForgotPassword?.addEventListener("click", closeForgotPasswordModalFlow);
+      forgotPasswordModal?.addEventListener("click", (event) => {
+        if (event.target === forgotPasswordModal) {
+          closeForgotPasswordModalFlow();
+        }
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && forgotPasswordModal && !forgotPasswordModal.hidden) {
+          closeForgotPasswordModalFlow();
+        }
+      });
+
+      forgotPasswordRequestForm?.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const email = String(forgotEmailInput?.value || "").trim().toLowerCase();
+        if (!email) {
+          setForgotPasswordStatus("Enter your workspace email address.", "error");
+          forgotEmailInput?.focus();
+          return;
+        }
+        try {
+          setForgotPasswordStatus("Sending verification code...", "success");
+          const data = await postJson(withBasePath("/api/auth/forgot-password/request"), { email });
+          syncForgotPasswordEmail(email);
+          showForgotPasswordStep("verify");
+          setForgotPasswordStatus(data.message || "Verification code sent.", "success");
+          forgotOtpInput?.focus();
+        } catch (error) {
+          setForgotPasswordStatus(error.message, "error");
+        }
+      });
+
+      forgotResendButton?.addEventListener("click", async () => {
+        const email = forgotPasswordState.email || String(forgotEmailInput?.value || "").trim().toLowerCase();
+        if (!email) {
+          showForgotPasswordStep("request");
+          setForgotPasswordStatus("Enter your workspace email address first.", "error");
+          forgotEmailInput?.focus();
+          return;
+        }
+        try {
+          setForgotPasswordStatus("Sending a fresh code...", "success");
+          const data = await postJson(withBasePath("/api/auth/forgot-password/request"), { email });
+          syncForgotPasswordEmail(email);
+          setForgotPasswordStatus(data.message || "A fresh code has been sent.", "success");
+          forgotOtpInput?.focus();
+        } catch (error) {
+          setForgotPasswordStatus(error.message, "error");
+        }
+      });
+
+      forgotPasswordVerifyForm?.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const email = forgotPasswordState.email;
+        const otp = String(forgotOtpInput?.value || "").replace(/\D/g, "").slice(0, 6);
+        forgotOtpInput.value = otp;
+        if (!email) {
+          showForgotPasswordStep("request");
+          setForgotPasswordStatus("Start with your email address to request a code.", "error");
+          forgotEmailInput?.focus();
+          return;
+        }
+        if (otp.length !== 6) {
+          setForgotPasswordStatus("Enter the 6-digit verification code from your email.", "error");
+          forgotOtpInput?.focus();
+          return;
+        }
+        try {
+          setForgotPasswordStatus("Verifying code...", "success");
+          const data = await postJson(withBasePath("/api/auth/forgot-password/verify"), { email, otp });
+          forgotPasswordState.resetToken = data.reset_token || "";
+          showForgotPasswordStep("reset");
+          setForgotPasswordStatus(data.message || "Code verified. Set your new password.", "success");
+          forgotNewPasswordInput?.focus();
+        } catch (error) {
+          setForgotPasswordStatus(error.message, "error");
+        }
+      });
+
+      forgotPasswordResetForm?.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        const email = forgotPasswordState.email;
+        const newPassword = String(forgotNewPasswordInput?.value || "");
+        const confirmPassword = String(forgotConfirmPasswordInput?.value || "");
+        if (!forgotPasswordState.resetToken) {
+          showForgotPasswordStep("verify");
+          setForgotPasswordStatus("Verify your email code before setting a new password.", "error");
+          forgotOtpInput?.focus();
+          return;
+        }
+        if (!newPassword || !confirmPassword) {
+          setForgotPasswordStatus("Enter and confirm your new password.", "error");
+          forgotNewPasswordInput?.focus();
+          return;
+        }
+        try {
+          setForgotPasswordStatus("Updating your password...", "success");
+          const data = await postJson(withBasePath("/api/auth/forgot-password/reset"), {
+            email,
+            reset_token: forgotPasswordState.resetToken,
+            new_password: newPassword,
+            confirm_password: confirmPassword,
+          });
+          setForgotPasswordStatus(
+            data.message || "Password updated successfully. Sign in with your new password.",
+            "success"
+          );
+          if (usernameInput && email) {
+            usernameInput.value = email;
+          }
+          forgotPasswordState.resetToken = "";
+          forgotPasswordResetForm?.reset();
+          window.setTimeout(() => {
+            closeForgotPasswordModalFlow();
+            resetForgotPasswordFlow({ preserveEmail: false });
+            passwordInput?.focus();
+          }, 1200);
+        } catch (error) {
+          setForgotPasswordStatus(error.message, "error");
+        }
+      });
+
+      document.addEventListener("mousemove", (event) => {
+        if (!mockBoard || window.innerWidth <= 1120) return;
+
+        const bounds = mockBoard.getBoundingClientRect();
+        const centerX = bounds.left + bounds.width / 2;
+        const centerY = bounds.top + bounds.height / 2;
+        const rotateY = (event.clientX - centerX) / 40;
+        const rotateX = (centerY - event.clientY) / 42;
+
+        mockBoard.style.transform =
+          "rotateX(" +
+          (12 + rotateX * 0.22) +
+          "deg) rotateY(" +
+          (-15 + rotateY * 0.16) +
+          "deg) rotateZ(6deg)";
+      });
+
+      window.addEventListener("mouseleave", () => {
+        if (!mockBoard) return;
+        mockBoard.style.transform = "rotateX(13deg) rotateY(-15deg) rotateZ(6deg)";
+      });
+
+      if (document.body.classList.contains("error-state")) {
+        setTimeout(() => {
+          document.body.classList.remove("error-state");
+        }, 1200);
+      }
+    </script>
+  </body>
+</html>
