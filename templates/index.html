@@ -13651,6 +13651,20 @@
             return fallbackName;
         }
 
+        const QA_SOFT_NOT_FOUND_ANSWER = "I wasn't able to find matching information in my knowledge sources for that request.";
+        const QA_INCOMPLETE_INPUT_ANSWER = "It looks like you were still typing. Please complete the sentence so I can help properly.";
+
+        function canCreateQaPresentation(question, answer) {
+            const safeQuestion = String(question || '').trim();
+            const safeAnswer = String(answer || '').replace(/\s+/g, ' ').trim();
+            if (!safeQuestion || !safeAnswer) return false;
+            const normalizedAnswer = safeAnswer.toLowerCase();
+            return normalizedAnswer !== QA_SOFT_NOT_FOUND_ANSWER.toLowerCase()
+                && normalizedAnswer !== QA_INCOMPLETE_INPUT_ANSWER.toLowerCase()
+                && !normalizedAnswer.includes("wasn't able to find matching information in my knowledge sources")
+                && !normalizedAnswer.includes("was not able to find matching information in my knowledge sources");
+        }
+
         function buildQaPresentationPayload(data, answerOverride = '') {
             const safeData = data && typeof data === 'object' ? data : {};
             return {
@@ -13672,7 +13686,7 @@
 
         async function createQaPresentation(payload, primaryButton, secondaryButton, statusEl) {
             const safePayload = payload && typeof payload === 'object' ? payload : {};
-            if (!String(safePayload.question || '').trim() || !String(safePayload.answer || '').trim()) {
+            if (!canCreateQaPresentation(safePayload.question, safePayload.answer)) {
                 await showAppAlert('I need both the question and answer to build a PPT for this response.', {
                     title: 'PPT Not Ready',
                     badge: '📊'
@@ -14248,10 +14262,10 @@
 			                        </div>
 			                        <div class="qa-chart-preview" hidden></div>
 			                    ` : ''}
-			                    ${question && answer ? `
-			                        <div class="qa-ppt-shell">
-			                            <div class="qa-ppt-label">Presentation</div>
-			                            <div class="qa-ppt-title">Do you want a PPT for this answer?</div>
+				                    ${canCreateQaPresentation(question, answer) ? `
+				                        <div class="qa-ppt-shell">
+				                            <div class="qa-ppt-label">Presentation</div>
+				                            <div class="qa-ppt-title">Do you want a PPT for this answer?</div>
 			                            <div class="qa-ppt-subtitle">AI Buzz will prepare a polished PowerPoint based on this question, answer, and the related highlights.</div>
 			                            <div class="qa-ppt-actions">
 			                                <button type="button" class="qa-ppt-btn qa-ppt-btn-primary" data-qa-ppt-action="yes">Yes, Create PPT</button>
@@ -16293,7 +16307,7 @@ async function processGemFile() {
     timeoutIds.push(setTimeout(() => {
         if (!responseReceived) {
             showGemProcessingStatus(
-                `🔍 Maybe there are Images in sub PDFs. Extracting and checking data from them…`,
+                `🔍 Validating the data and cross verifying the output and generating summary`,
                 'extract'
             );
         }
@@ -16303,8 +16317,8 @@ async function processGemFile() {
     timeoutIds.push(setTimeout(() => {
         if (!responseReceived) {
             showGemProcessingStatus(
-                `⏳ Images detected in sub PDFs. Please wait patiently, we will get your data…`,
-                'processing'
+                `⏳Maybe there are Images in sub PDFs. Extracting and checking data from them…`,
+                'extract'
             );
         }
     }, 7 * 60 * 1000));

@@ -2144,6 +2144,20 @@ _QA_SOFT_NOT_FOUND_ANSWER = "I wasn't able to find matching information in my kn
 _QA_INCOMPLETE_INPUT_ANSWER = "It looks like you were still typing. Please complete the sentence so I can help properly."
 
 
+def _qa_can_generate_presentation(question: str, answer: str) -> bool:
+    safe_question = str(question or "").strip()
+    safe_answer = " ".join(str(answer or "").split()).strip()
+    if not safe_question or not safe_answer:
+        return False
+    normalized_answer = safe_answer.lower()
+    return (
+        normalized_answer != _QA_SOFT_NOT_FOUND_ANSWER.lower()
+        and normalized_answer != _QA_INCOMPLETE_INPUT_ANSWER.lower()
+        and "wasn't able to find matching information in my knowledge sources" not in normalized_answer
+        and "was not able to find matching information in my knowledge sources" not in normalized_answer
+    )
+
+
 def _qa_incomplete_input_payload(conversation_id: str) -> dict:
     return {
         "answer": _QA_INCOMPLETE_INPUT_ANSWER,
@@ -5556,6 +5570,8 @@ def generate_qa_presentation(
         raise HTTPException(status_code=400, detail="Question is required to generate a presentation.")
     if not answer:
         raise HTTPException(status_code=400, detail="Answer is required to generate a presentation.")
+    if not _qa_can_generate_presentation(question, answer):
+        raise HTTPException(status_code=400, detail="A presentation can only be generated when AI Buzz has an answer.")
 
     output_path = None
     retention_hours = resolve_retention_hours(temporaryRetentionHours)
