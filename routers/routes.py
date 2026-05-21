@@ -1,4 +1,5 @@
-﻿from xml.parsers.expat import model
+﻿import asyncio
+from xml.parsers.expat import model
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 import os, shutil
@@ -6384,7 +6385,7 @@ async def process_gem_pdf(file: UploadFile = File(...)):
             f.write(file_bytes)
 
         # Process and get back the output Excel path
-        result = gem_processing(str(tmp_path))
+        result = await asyncio.to_thread(gem_processing, str(tmp_path))
 
         if result.get("status") == "error":
             raise HTTPException(status_code=500, detail=result.get("message", "Processing failed."))
