@@ -1919,6 +1919,68 @@ class MongoDBManager:
             logger.error(f"Error updating password for user '{user_id}': {e}")
             return None
 
+    def update_user_face_enrollment(self, user_id, face_auth_record):
+        """Store encrypted face-login descriptors for a user."""
+        if not self._ensure_connection():
+            logger.error("No database connection")
+            return None
+        try:
+            from bson import ObjectId
+
+            object_id = ObjectId(str(user_id))
+            safe_record = dict(face_auth_record or {})
+            if not safe_record.get("embedding_ciphertext"):
+                return None
+
+            result = self.users.update_one(
+                {"_id": object_id},
+                {
+                    "$set": {
+                        "face_auth": {**safe_record, "updated_at": datetime.utcnow()},
+                        "updated_at": datetime.utcnow(),
+                    }
+                },
+            )
+            if result.matched_count == 0:
+                return None
+            return self.get_user_by_id(user_id)
+        except Exception as e:
+            logger.error(f"Error updating face enrollment for user '{user_id}': {e}")
+            return None
+
+    def list_face_enabled_users(self, limit=500):
+        """Return users with face-login samples for server-side matching."""
+        if not self._ensure_connection():
+            logger.error("No database connection")
+            return []
+        try:
+            safe_limit = max(1, min(int(limit or 500), 1000))
+            projection = {
+                "username": 1,
+                "email": 1,
+                "employee_code": 1,
+                "user_type": 1,
+                "role": 1,
+                "created_by": 1,
+                "onboarding": 1,
+                "face_auth": 1,
+            }
+            return list(
+                self.users.find(
+                    {
+                        "face_auth.enabled": True,
+                        "$or": [
+                            {"face_auth.embedding_ciphertext": {"$exists": True, "$ne": ""}},
+                            {"face_auth.samples": {"$exists": True, "$ne": []}},
+                        ],
+                    },
+                    projection,
+                ).limit(safe_limit)
+            )
+        except Exception as e:
+            logger.error(f"Error listing face-enabled users: {e}")
+            return []
+
     def list_users(self, limit=100, include_legacy=False, created_by=None):
         """List users without exposing passwords."""
         if not self._ensure_connection():

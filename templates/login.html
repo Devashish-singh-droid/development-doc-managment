@@ -486,9 +486,40 @@
         cursor: pointer;
       }
 
-      .secondary-btn:hover {
-        background: rgba(255, 240, 230, 0.98);
-      }
+	      .secondary-btn:hover {
+	        background: rgba(255, 240, 230, 0.98);
+	      }
+
+	      .face-action-row {
+	        display: grid;
+	        grid-template-columns: 1fr;
+	        gap: 10px;
+	      }
+
+	      .face-btn {
+	        border: 1px solid rgba(239, 155, 101, 0.3);
+	        background: rgba(255, 249, 244, 0.98);
+	        color: #8f4a20;
+	        border-radius: 16px;
+	        padding: 13px 12px;
+	        font-size: 14px;
+	        font-weight: 800;
+	        cursor: pointer;
+	      }
+
+	      .face-btn.primary {
+	        background: #1f1b1a;
+	        border-color: #1f1b1a;
+	        color: #ffffff;
+	      }
+
+	      .face-camera {
+	        width: 100%;
+	        aspect-ratio: 4 / 3;
+	        border-radius: 20px;
+	        background: #17120f;
+	        object-fit: cover;
+	      }
 
       .login-btn {
         position: relative;
@@ -1185,11 +1216,16 @@
           grid-template-columns: 1fr;
         }
 
-        .button-row,
-        .modal-topbar {
-          flex-direction: column;
-          align-items: stretch;
-        }
+	      .button-row,
+	      .face-action-row,
+	      .modal-topbar {
+	        flex-direction: column;
+	        align-items: stretch;
+	      }
+
+	      .face-action-row {
+	        grid-template-columns: 1fr;
+	      }
       }
     </style>
   </head>
@@ -1278,8 +1314,13 @@
                 <div class="error-msg">{{ error }}</div>
                 {% endif %}
 
-                <button type="submit" class="login-btn">Enter Secure Workspace</button>
-              </form>
+		                <button type="submit" class="login-btn">Enter Secure Workspace</button>
+		                {% if face_auth_enabled %}
+		                <div class="face-action-row">
+		                  <button type="button" class="face-btn primary" id="faceLoginButton">Login with face</button>
+		                </div>
+		                {% endif %}
+	              </form>
 
               <div class="trust-row">
                 <div class="trust-pill">
@@ -1301,8 +1342,8 @@
               </div>
             </div>
 
-            <div class="modal-backdrop" id="forgotPasswordModal" hidden>
-              <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="forgotPasswordTitle">
+	            <div class="modal-backdrop" id="forgotPasswordModal" hidden>
+	              <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="forgotPasswordTitle">
                 <div class="modal-topbar">
                   <div>
                     <h3 id="forgotPasswordTitle">Reset your password</h3>
@@ -1411,10 +1452,31 @@
                     Use at least 8 characters with uppercase, lowercase, a number, and a special character.
                   </p>
                   <button type="submit" class="login-btn">Update Password</button>
-                </form>
-              </div>
-            </div>
-          </div>
+	                </form>
+	              </div>
+	            </div>
+
+	            <div class="modal-backdrop" id="faceAuthModal" hidden>
+	              <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="faceAuthTitle">
+	                <div class="modal-topbar">
+	                  <div>
+	                    <h3 id="faceAuthTitle">Face login</h3>
+	                    <p id="faceAuthHelp">Look at the camera clearly, then capture your face.</p>
+	                  </div>
+	                  <button type="button" class="icon-btn" id="closeFaceAuth" aria-label="Close face login">
+	                    &times;
+	                  </button>
+	                </div>
+	                <video id="faceVideo" class="face-camera" autoplay muted playsinline></video>
+	                <canvas id="faceCanvas" hidden></canvas>
+	                <div id="faceAuthStatus" class="modal-status" hidden></div>
+	                <div class="button-row">
+	                  <button type="button" class="login-btn" id="captureFaceButton">Capture Face</button>
+	                  <button type="button" class="secondary-btn" id="retryFaceButton">Restart Camera</button>
+	                </div>
+	              </div>
+	            </div>
+	          </div>
 
           <div class="auth-footer">
             <span>Copyright (c) 2026, Megamax AI</span>
@@ -1563,12 +1625,23 @@
       const forgotResetEmailInput = document.getElementById("forgotResetEmail");
       const forgotOtpInput = document.getElementById("forgotOtp");
       const forgotNewPasswordInput = document.getElementById("forgotNewPassword");
-      const forgotConfirmPasswordInput = document.getElementById("forgotConfirmPassword");
-      const forgotResendButton = document.getElementById("forgotResendButton");
-      const forgotPasswordState = {
-        email: "",
-        resetToken: "",
-      };
+	      const forgotConfirmPasswordInput = document.getElementById("forgotConfirmPassword");
+	      const forgotResendButton = document.getElementById("forgotResendButton");
+		      const faceLoginButton = document.getElementById("faceLoginButton");
+	      const faceAuthModal = document.getElementById("faceAuthModal");
+	      const closeFaceAuth = document.getElementById("closeFaceAuth");
+	      const faceAuthTitle = document.getElementById("faceAuthTitle");
+	      const faceAuthHelp = document.getElementById("faceAuthHelp");
+	      const faceAuthStatus = document.getElementById("faceAuthStatus");
+	      const faceVideo = document.getElementById("faceVideo");
+	      const faceCanvas = document.getElementById("faceCanvas");
+	      const captureFaceButton = document.getElementById("captureFaceButton");
+	      const retryFaceButton = document.getElementById("retryFaceButton");
+	      let faceStream = null;
+	      const forgotPasswordState = {
+	        email: "",
+	        resetToken: "",
+	      };
 
       function togglePasswordInput(targetId, triggerButton) {
         const targetInput = document.getElementById(targetId);
@@ -1659,33 +1732,160 @@
         setForgotPasswordStatus("");
       }
 
-      async function postJson(url, payload) {
-        const response = await fetch(url, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
+	      async function postJson(url, payload) {
+	        const response = await fetch(url, {
+	          method: "POST",
+	          headers: {
+	            "Content-Type": "application/json",
           },
           body: JSON.stringify(payload),
         });
         const data = await response.json().catch(() => ({}));
         if (!response.ok) {
           throw new Error(data.detail || "Something went wrong. Please try again.");
-        }
-        return data;
-      }
+	        }
+	        return data;
+	      }
 
-      forgotPasswordTrigger?.addEventListener("click", openForgotPasswordModal);
-      closeForgotPassword?.addEventListener("click", closeForgotPasswordModalFlow);
-      forgotPasswordModal?.addEventListener("click", (event) => {
-        if (event.target === forgotPasswordModal) {
-          closeForgotPasswordModalFlow();
-        }
-      });
-      document.addEventListener("keydown", (event) => {
-        if (event.key === "Escape" && forgotPasswordModal && !forgotPasswordModal.hidden) {
-          closeForgotPasswordModalFlow();
-        }
-      });
+	      function setFaceAuthStatus(message, type = "success") {
+	        if (!faceAuthStatus) return;
+	        if (!message) {
+	          faceAuthStatus.hidden = true;
+	          faceAuthStatus.textContent = "";
+	          faceAuthStatus.className = "modal-status";
+	          return;
+	        }
+	        faceAuthStatus.hidden = false;
+	        faceAuthStatus.textContent = message;
+	        faceAuthStatus.className = "modal-status " + type;
+	      }
+
+	      function stopFaceCamera() {
+	        if (faceStream) {
+	          faceStream.getTracks().forEach((track) => track.stop());
+	          faceStream = null;
+	        }
+	        if (faceVideo) {
+	          faceVideo.srcObject = null;
+	        }
+	      }
+
+	      async function startFaceCamera() {
+	        if (!navigator.mediaDevices?.getUserMedia) {
+	          throw new Error("Camera access is not supported in this browser.");
+	        }
+	        stopFaceCamera();
+	        faceStream = await navigator.mediaDevices.getUserMedia({
+	          video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } },
+	          audio: false,
+	        });
+	        faceVideo.srcObject = faceStream;
+	        await faceVideo.play();
+	      }
+
+	      async function openFaceAuthModal(mode) {
+		        if (faceAuthTitle) {
+		          faceAuthTitle.textContent = "Login with face";
+		        }
+		        if (faceAuthHelp) {
+		          faceAuthHelp.textContent = "Look at the camera clearly. We will match you with an enrolled account.";
+	        }
+	        setFaceAuthStatus("Opening camera...", "success");
+	        faceAuthModal.hidden = false;
+	        document.body.classList.add("modal-open");
+	        try {
+	          await startFaceCamera();
+	          setFaceAuthStatus("Camera ready. Center your face and capture.", "success");
+	        } catch (error) {
+	          setFaceAuthStatus(error.message || "Could not open the camera.", "error");
+	        }
+	      }
+
+	      function closeFaceAuthModalFlow() {
+	        if (!faceAuthModal) return;
+	        stopFaceCamera();
+	        faceAuthModal.hidden = true;
+	        document.body.classList.remove("modal-open");
+	        setFaceAuthStatus("");
+	      }
+
+	      function captureFaceImage() {
+	        if (!faceVideo || !faceCanvas || !faceVideo.videoWidth) {
+	          throw new Error("Camera is not ready yet.");
+	        }
+	        faceCanvas.width = faceVideo.videoWidth;
+	        faceCanvas.height = faceVideo.videoHeight;
+	        const context = faceCanvas.getContext("2d");
+	        context.drawImage(faceVideo, 0, 0, faceCanvas.width, faceCanvas.height);
+	        return faceCanvas.toDataURL("image/jpeg", 0.9);
+	      }
+
+	      function wait(ms) {
+	        return new Promise((resolve) => window.setTimeout(resolve, ms));
+	      }
+
+	      async function captureFaceImages(count = 3) {
+	        const images = [];
+	        for (let index = 0; index < count; index += 1) {
+	          images.push(captureFaceImage());
+	          if (index < count - 1) {
+	            await wait(350);
+	          }
+	        }
+	        return images;
+	      }
+
+	      async function submitFaceAuth() {
+	        try {
+	          captureFaceButton.disabled = true;
+	          setFaceAuthStatus("Capturing secure face samples...", "success");
+		          const images = await captureFaceImages(2);
+	          setFaceAuthStatus("Checking face...", "success");
+	          let data;
+		          data = await postJson(withBasePath("/api/auth/face/login"), { images });
+	          setFaceAuthStatus(data.message || "Done.", "success");
+	          if (data.redirect_url) {
+	            window.location.href = data.redirect_url;
+	          }
+	        } catch (error) {
+	          setFaceAuthStatus(error.message, "error");
+	        } finally {
+	          captureFaceButton.disabled = false;
+	        }
+	      }
+
+	      forgotPasswordTrigger?.addEventListener("click", openForgotPasswordModal);
+		      closeForgotPassword?.addEventListener("click", closeForgotPasswordModalFlow);
+		      faceLoginButton?.addEventListener("click", () => openFaceAuthModal("login"));
+		      closeFaceAuth?.addEventListener("click", closeFaceAuthModalFlow);
+	      captureFaceButton?.addEventListener("click", submitFaceAuth);
+	      retryFaceButton?.addEventListener("click", async () => {
+	        try {
+	          setFaceAuthStatus("Restarting camera...", "success");
+	          await startFaceCamera();
+	          setFaceAuthStatus("Camera ready. Center your face and capture.", "success");
+	        } catch (error) {
+	          setFaceAuthStatus(error.message || "Could not restart the camera.", "error");
+	        }
+	      });
+	      forgotPasswordModal?.addEventListener("click", (event) => {
+	        if (event.target === forgotPasswordModal) {
+	          closeForgotPasswordModalFlow();
+	        }
+	      });
+	      faceAuthModal?.addEventListener("click", (event) => {
+	        if (event.target === faceAuthModal) {
+	          closeFaceAuthModalFlow();
+	        }
+	      });
+	      document.addEventListener("keydown", (event) => {
+	        if (event.key === "Escape" && forgotPasswordModal && !forgotPasswordModal.hidden) {
+	          closeForgotPasswordModalFlow();
+	        }
+	        if (event.key === "Escape" && faceAuthModal && !faceAuthModal.hidden) {
+	          closeFaceAuthModalFlow();
+	        }
+	      });
 
       forgotPasswordRequestForm?.addEventListener("submit", async (event) => {
         event.preventDefault();
