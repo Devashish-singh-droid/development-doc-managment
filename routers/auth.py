@@ -16,6 +16,9 @@ from utils.microsoft_graph_auth import (
 from services.models import (
     CreateUserRequest,
     CreateUserResponse,
+    FaceAuthResponse,
+    FaceEnrollRequest,
+    FaceLoginRequest,
     ForgotPasswordRequest,
     ForgotPasswordRequestResponse,
     ForgotPasswordResetRequest,
@@ -30,6 +33,7 @@ from services.models import (
     UserOnboardingUpdateRequest,
     UsersListResponse,
 )
+from services.face_auth import FaceAuthError, build_face_auth_record, extract_face_embeddings, find_best_face_match
 from services.rbac import (
     can_create_role,
     get_creatable_roles,
@@ -55,10 +59,13 @@ from urllib.parse import urlencode, urlparse, parse_qsl, urlunparse
 SESSION_STORE = {}  # session_id -> {"user_id": int, "username": str, "email": str, "user_type": str, "start": datetime, "last": datetime}
 PASSWORD_RESET_OTP_CACHE = {}  # email -> {"user_id": str, "otp_hash": str, "expires_at": datetime, "attempts": int}
 PASSWORD_RESET_TOKEN_CACHE = {}  # reset_token -> {"user_id": str, "email": str, "expires_at": datetime}
+FACE_LOGIN_ATTEMPT_CACHE = {}  # client_ip -> {"attempts": int, "locked_until": datetime | None, "updated_at": datetime}
 SESSION_TTL_HOURS = settings.session_ttl_hours
 INACTIVITY_TTL_HOURS = settings.inactivity_ttl_hours
 JWT_ALGORITHM = "HS256"
 MAX_SUPER_ADMIN_USERS = 2
+FACE_LOGIN_MAX_ATTEMPTS = 5
+FACE_LOGIN_LOCK_MINUTES = 5
 
 
 def _normalize_allowed_email_domain(value: str | None) -> str:
@@ -188,6 +195,37 @@ def _reset_password_with_cached_token(db_manager: MongoDBManager, email: str, re
         "email": email,
         "user": updated_user,
     }
+
+
+def _get_face_login_lock_error(client_ip: str, now: datetime | None = None) -> str | None:
+    current_time = now or datetime.utcnow()
+    record = FACE_LOGIN_ATTEMPT_CACHE.get(str(client_ip or "unknown"))
+    if not record:
+        return None
+    locked_until = record.get("locked_until")
+    if isinstance(locked_until, datetime) and locked_until > current_time:
+        minutes = max(1, int((locked_until - current_time).total_seconds() // 60) + 1)
+        return f"Too many face login attempts. Try again in {minutes} minute(s)."
+    if isinstance(locked_until, datetime) and locked_until <= current_time:
+        FACE_LOGIN_ATTEMPT_CACHE.pop(str(client_ip or "unknown"), None)
+    return None
+
+
+def _record_face_login_failure(client_ip: str, now: datetime | None = None) -> None:
+    current_time = now or datetime.utcnow()
+    key = str(client_ip or "unknown")
+    record = FACE_LOGIN_ATTEMPT_CACHE.setdefault(
+        key,
+        {"attempts": 0, "locked_until": None, "updated_at": current_time},
+    )
+    record["attempts"] = int(record.get("attempts") or 0) + 1
+    record["updated_at"] = current_time
+    if record["attempts"] >= FACE_LOGIN_MAX_ATTEMPTS:
+        record["locked_until"] = current_time + timedelta(minutes=FACE_LOGIN_LOCK_MINUTES)
+
+
+def _clear_face_login_failures(client_ip: str) -> None:
+    FACE_LOGIN_ATTEMPT_CACHE.pop(str(client_ip or "unknown"), None)
 
 
 def _invalidate_sessions_for_user(user_id: str | None) -> int:
@@ -515,8 +553,45 @@ def get_auth_routes(app):
                 "request": request,
                 "error": None,
                 "base_path": _get_request_root_path(request),
+                "face_auth_enabled": settings.face_auth_enabled,
             },
         )
+
+    def _complete_login_for_user(request: Request, user: dict, username: str, action: str = "LOGIN"):
+        client_ip = get_client_ip(request)
+        db_manager.log_activity(
+            username=username,
+            action=action,
+            details=f"User {username} successfully logged in",
+            client_ip=client_ip,
+        )
+        onboarding_state = user.get("onboarding") if isinstance(user.get("onboarding"), dict) else {}
+        serialized_onboarding = _serialize_user_onboarding_state(onboarding_state)
+        onboarding_should_show = bool(serialized_onboarding.get("should_show"))
+        if onboarding_should_show:
+            next_onboarding_state = {
+                **onboarding_state,
+                "status": _normalize_onboarding_status(onboarding_state.get("status")),
+                "auto_shown_at": _to_utc_iso(datetime.utcnow()),
+            }
+            db_manager.update_user_fields(str(user["_id"]), {"onboarding": next_onboarding_state})
+
+        sid = create_session(
+            str(user["_id"]),
+            username=username,
+            email=user.get("email") or username,
+            user_type=user.get("user_type"),
+            role=user.get("role"),
+            created_by=user.get("created_by"),
+            onboarding_should_show=onboarding_should_show,
+        )
+        user_role = get_session_role({"role": user.get("role"), "user_type": user.get("user_type")})
+        landing_path = "/dashboard"
+        if user_role and user_role.value == "employee":
+            landing_path = "/qa"
+        elif user_role and user_role.value == "manager":
+            landing_path = "/upload-&-process"
+        return sid, _app_path(landing_path, request=request)
 
     @app.middleware("http")
     async def auth_middleware(request: Request, call_next):
@@ -532,6 +607,7 @@ def get_auth_routes(app):
             "/api/public-transcript",
             "/api/generate-transcript",
             "/api/auth/forgot-password",
+            "/api/auth/face/login",
         )
         if path.startswith(allow_prefixes):
             return await call_next(request)
@@ -623,39 +699,8 @@ def get_auth_routes(app):
         user = db_manager.find_user(username, password)
         if user:
             logger.info(f"Login successful for user: {username}")
-            # Log the login activity
-            db_manager.log_activity(
-                username=username,
-                action="LOGIN",
-                details=f"User {username} successfully logged in",
-                client_ip=client_ip,
-            )
-            onboarding_state = user.get("onboarding") if isinstance(user.get("onboarding"), dict) else {}
-            serialized_onboarding = _serialize_user_onboarding_state(onboarding_state)
-            onboarding_should_show = bool(serialized_onboarding.get("should_show"))
-            if onboarding_should_show:
-                next_onboarding_state = {
-                    **onboarding_state,
-                    "status": _normalize_onboarding_status(onboarding_state.get("status")),
-                    "auto_shown_at": _to_utc_iso(datetime.utcnow()),
-                }
-                db_manager.update_user_fields(str(user["_id"]), {"onboarding": next_onboarding_state})
-            sid = create_session(
-                str(user["_id"]),
-                username=username,
-                email=user.get("email") or username,
-                user_type=user.get("user_type"),
-                role=user.get("role"),
-                created_by=user.get("created_by"),
-                onboarding_should_show=onboarding_should_show,
-            )
-            user_role = get_session_role({"role": user.get("role"), "user_type": user.get("user_type")})
-            landing_path = "/dashboard"
-            if user_role and user_role.value == "employee":
-                landing_path = "/qa"
-            elif user_role and user_role.value == "manager":
-                landing_path = "/upload-&-process"
-            resp = RedirectResponse(_app_path(landing_path, request=request), status_code=302)
+            sid, landing_url = _complete_login_for_user(request, user, username, action="LOGIN")
+            resp = RedirectResponse(landing_url, status_code=302)
             _set_auth_cookies(resp, sid)
             return resp
         logger.warning(f"Login failed for user: {username}")
@@ -673,8 +718,95 @@ def get_auth_routes(app):
                 "request": request,
                 "error": "Invalid credentials. Please try again.",
                 "base_path": _get_request_root_path(request),
+                "face_auth_enabled": settings.face_auth_enabled,
             },
         )
+
+    @app.post("/api/auth/face/enroll", response_model=FaceAuthResponse)
+    async def enroll_face_login(request: Request, payload: FaceEnrollRequest):
+        if not settings.face_auth_enabled:
+            raise HTTPException(status_code=403, detail="Face login is disabled by system settings.")
+        session_email = str(getattr(request.state, "email", None) or getattr(request.state, "username", None) or "").strip().lower()
+        email = str(payload.email or session_email or "").strip().lower()
+        password = str(payload.password or "").strip()
+        if not email or not password:
+            raise HTTPException(status_code=400, detail="Enter your email and password before setting up face login.")
+        if session_email and email != session_email:
+            raise HTTPException(status_code=403, detail="You can set up face login only for your own account.")
+
+        user = db_manager.find_user(email, password)
+        if not user:
+            db_manager.log_activity(
+                username=email or "unknown",
+                action="FACE_ENROLL_FAILED",
+                details="Face enrollment failed because credentials were invalid",
+                client_ip=get_client_ip(request),
+            )
+            raise HTTPException(status_code=401, detail="Email or password is incorrect.")
+
+        face_images = payload.images or [payload.image]
+        try:
+            face_auth_record = build_face_auth_record(face_images)
+        except FaceAuthError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        updated_user = db_manager.update_user_face_enrollment(str(user["_id"]), face_auth_record)
+        if not updated_user:
+            raise HTTPException(status_code=500, detail="Face login could not be set up.")
+
+        db_manager.log_activity(
+            username=email,
+            action="FACE_ENROLL",
+            details=f"Face login enrolled for user {email}",
+            client_ip=get_client_ip(request),
+        )
+        return {
+            "status": "success",
+            "message": "Face login is ready. You can use Login with face next time.",
+            "email": email,
+        }
+
+    @app.post("/api/auth/face/login", response_model=FaceAuthResponse)
+    async def login_with_face(request: Request, payload: FaceLoginRequest):
+        if not settings.face_auth_enabled:
+            raise HTTPException(status_code=403, detail="Face login is disabled by system settings.")
+        client_ip = get_client_ip(request)
+        lock_error = _get_face_login_lock_error(client_ip)
+        if lock_error:
+            raise HTTPException(status_code=429, detail=lock_error)
+
+        face_images = payload.images or [payload.image]
+        try:
+            probe_embeddings = extract_face_embeddings(face_images)
+        except FaceAuthError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        candidates = db_manager.list_face_enabled_users()
+        match = find_best_face_match(probe_embeddings, candidates)
+        if not match:
+            _record_face_login_failure(client_ip)
+            db_manager.log_activity(
+                username="unknown",
+                action="FACE_LOGIN_FAILED",
+                details="Face login failed because no enrolled face matched",
+                client_ip=client_ip,
+            )
+            raise HTTPException(status_code=401, detail="Face not recognized. Use password, then set up face login from Settings.")
+
+        user = match.user
+        username = str(user.get("email") or user.get("username") or "").strip()
+        _clear_face_login_failures(client_ip)
+        sid, redirect_url = _complete_login_for_user(request, user, username, action="FACE_LOGIN")
+        response = JSONResponse(
+            {
+                "status": "success",
+                "message": "Face recognized. Signing you in.",
+                "redirect_url": redirect_url,
+                "email": username,
+            }
+        )
+        _set_auth_cookies(response, sid)
+        return response
 
     @app.post("/api/auth/forgot-password/request", response_model=ForgotPasswordRequestResponse)
     async def forgot_password_request(request: Request, payload: ForgotPasswordRequest):
@@ -1046,6 +1178,7 @@ def get_auth_routes(app):
                 "employee_code": user.get("employee_code"),
                 "allowed_user_email_domain": settings.allowed_user_email_domain,
                 "guided_tour_enabled": True,
+                "face_auth_enabled": settings.face_auth_enabled,
                 "created_by": user.get("created_by"),
                 "created_at": str(user.get("created_at")),
                 "permissions": sorted(get_role_permissions(role)),

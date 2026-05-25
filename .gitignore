@@ -113,3 +113,4 @@ myenv/
 /templates/outputs
 /gem-testing
 gem-testing/extracted_links.txt
+/models/insightface

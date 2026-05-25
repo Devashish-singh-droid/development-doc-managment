@@ -1,5 +1,4 @@
-﻿import asyncio
-from xml.parsers.expat import model
+﻿from xml.parsers.expat import model
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 import os, shutil
@@ -5606,13 +5605,11 @@ def health_check():
 
 @router.get("/system-settings", response_model=SystemSettingsResponse)
 def get_system_settings(request: Request):
-    user_role = _get_request_role(request)
-    if user_role not in {UserRole.ADMIN, UserRole.SUPER_ADMIN}:
-        raise HTTPException(status_code=403, detail="Only Admin or Super Admin can view system settings.")
     return {
         "generate_video_transcripts": settings.generate_video_transcripts,
         "save_original_documents": settings.save_original_documents,
         "guided_tour_enabled": True,
+        "face_auth_enabled": settings.face_auth_enabled,
         "allowed_user_email_domain": settings.allowed_user_email_domain,
     }
 
@@ -5625,13 +5622,16 @@ def update_system_settings(request: Request, payload: UpdateSystemSettingsReques
     allowed_domain = str(payload.allowed_user_email_domain or "").strip().lower().lstrip("@")
     if not allowed_domain:
         raise HTTPException(status_code=400, detail="Allowed email domain is required.")
-    settings.set_persistent_value("GENERATE_VIDEO_TRANSCRIPTS", payload.generate_video_transcripts)
+    if user_role == UserRole.SUPER_ADMIN:
+        settings.set_persistent_value("GENERATE_VIDEO_TRANSCRIPTS", payload.generate_video_transcripts)
     settings.set_persistent_value("SAVE_ORIGINAL_DOCUMENTS", payload.save_original_documents)
+    settings.set_persistent_value("FACE_AUTH_ENABLED", payload.face_auth_enabled)
     settings.set_persistent_value("ALLOWED_USER_EMAIL_DOMAIN", allowed_domain)
     return {
         "generate_video_transcripts": settings.generate_video_transcripts,
         "save_original_documents": settings.save_original_documents,
         "guided_tour_enabled": True,
+        "face_auth_enabled": settings.face_auth_enabled,
         "allowed_user_email_domain": settings.allowed_user_email_domain,
     }
 
@@ -6385,7 +6385,7 @@ async def process_gem_pdf(file: UploadFile = File(...)):
             f.write(file_bytes)
 
         # Process and get back the output Excel path
-        result = await asyncio.to_thread(gem_processing, str(tmp_path))
+        result = gem_processing(str(tmp_path))
 
         if result.get("status") == "error":
             raise HTTPException(status_code=500, detail=result.get("message", "Processing failed."))

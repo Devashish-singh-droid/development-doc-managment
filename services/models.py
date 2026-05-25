@@ -166,6 +166,7 @@ class SystemSettingsResponse(ApiModel):
     generate_video_transcripts: bool
     save_original_documents: bool
     guided_tour_enabled: bool
+    face_auth_enabled: bool
     allowed_user_email_domain: str
 
 
@@ -173,6 +174,7 @@ class UpdateSystemSettingsRequest(ApiModel):
     generate_video_transcripts: bool
     save_original_documents: bool
     guided_tour_enabled: bool = True
+    face_auth_enabled: bool = True
     allowed_user_email_domain: str
 
 
@@ -495,6 +497,18 @@ class ForgotPasswordResetRequest(ApiModel):
     confirm_password: str = ""
 
 
+class FaceEnrollRequest(ApiModel):
+    email: str = ""
+    password: str = ""
+    image: str = ""
+    images: List[str] = Field(default_factory=list)
+
+
+class FaceLoginRequest(ApiModel):
+    image: str = ""
+    images: List[str] = Field(default_factory=list)
+
+
 class ForgotPasswordRequestResponse(ApiModel):
     status: str
     message: str
@@ -509,6 +523,13 @@ class ForgotPasswordVerifyResponse(ApiModel):
 class ForgotPasswordResetResponse(ApiModel):
     status: str
     message: str
+
+
+class FaceAuthResponse(ApiModel):
+    status: str
+    message: str
+    redirect_url: Optional[str] = None
+    email: Optional[str] = None
 
 
 class UserOnboardingUpdateRequest(ApiModel):

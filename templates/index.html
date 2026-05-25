@@ -432,6 +432,40 @@
             transform: translateX(26px);
         }
 
+        .face-setup-panel {
+            display: grid;
+            gap: 14px;
+            padding: 18px;
+            margin-bottom: 18px;
+            border: 1px solid rgba(255, 211, 183, 0.88);
+            border-radius: 18px;
+            background: linear-gradient(135deg, rgba(255,255,255,0.96), rgba(255,246,239,0.98));
+            box-shadow: var(--panel-shadow-soft);
+        }
+
+        .face-setup-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            align-items: center;
+        }
+
+        .face-setup-password {
+            margin-bottom: 0;
+        }
+
+        .face-setup-video {
+            width: min(100%, 520px);
+            aspect-ratio: 4 / 3;
+            border-radius: 18px;
+            background: #17120f;
+            object-fit: cover;
+        }
+
+        .face-setup-status {
+            margin-bottom: 0;
+        }
+
         .settings-summary-box {
             padding: 16px 18px;
             border-radius: 18px;
@@ -6824,7 +6858,7 @@
             <li><a class="menu-link" id="menu-gem" data-role-required="all" data-route="gem" onclick="showPage('gem')"> GEM(MM)</a></li>
             <li><a class="menu-link" id="menu-profiles" data-role-required="manager,admin,super_admin" data-route="employeeProfiles" onclick="showPage('employeeProfiles')"> Employee Profiles</a></li>
             <li><a class="menu-link" id="menu-users" data-role-required="manager,admin,super_admin" onclick="showPage('users')"> Users</a></li>
-            <li><a class="menu-link" id="menu-settings" data-role-required="admin,super_admin" onclick="showPage('settings')"> Settings</a></li>
+            <li><a class="menu-link" id="menu-settings" data-role-required="all" onclick="showPage('settings')"> Settings</a></li>
             <li><a class="menu-link" id="menu-auditlog" data-role-required="super_admin" onclick="showPage('auditlog')"> Audit Log</a></li>
             <li><a class="menu-link" style="color:#ffffff;font-weight:bold;" onclick="confirmLogout()">Logout</a></li>
         </ul>
@@ -8043,36 +8077,30 @@
                                 <h2>System Settings</h2>
                                 <p>Manage the defaults used for new uploads, imports, and user creation. Changes here affect future activity and do not rewrite already processed records.</p>
                             </div>
-                            <button id="settings-save-btn" class="btn btn-primary" type="button" onclick="saveSystemSettings()">Save Settings</button>
+                            <button id="settings-save-btn" class="btn btn-primary" type="button" onclick="saveSystemSettings()" data-settings-roles="admin,super_admin">Save Settings</button>
                         </div>
 
-                        <div id="settings-status" class="settings-status">
+                        <div id="settings-status" class="settings-status" data-settings-roles="admin,super_admin">
                             Loading system settings...
                         </div>
 
-                        <div class="settings-toggle-list">
-                            <div class="settings-toggle-row">
-                                <div class="settings-toggle-copy">
-                                    <strong>Generate video transcripts</strong>
-                                    <span>Create searchable text from newly uploaded video files so those files can be used in AI Buzz and document workflows.</span>
-                                </div>
-                                <label class="settings-toggle-switch" aria-label="Toggle video transcript generation">
-                                    <input type="checkbox" id="setting-generate-video-transcripts">
-                                    <span class="settings-toggle-slider"></span>
-                                </label>
+                        <div class="face-setup-panel">
+                            <div class="settings-toggle-copy">
+                                <strong>Set up face login</strong>
+                                <span>Capture your face from Settings. After setup, you can use Login with face on the sign-in page when the feature is enabled.</span>
                             </div>
-
-                            <div class="settings-toggle-row">
-                                <div class="settings-toggle-copy">
-                                    <strong>Save original documents</strong>
-                                    <span>Keep the original uploaded file alongside extracted data for future downloads, audits, and troubleshooting.</span>
-                                </div>
-                                <label class="settings-toggle-switch" aria-label="Toggle original file preservation">
-                                    <input type="checkbox" id="setting-save-original-documents">
-                                    <span class="settings-toggle-slider"></span>
-                                </label>
+                            <div class="face-setup-actions">
+                                <button id="face-setup-start-btn" class="btn btn-secondary" type="button" onclick="startFaceSetupFromSettings()">Start Face Setup</button>
+                                <button id="face-setup-capture-btn" class="btn btn-primary" type="button" onclick="captureFaceSetupFromSettings()" hidden>Capture & Save</button>
+                                <button id="face-setup-cancel-btn" class="btn btn-secondary" type="button" onclick="stopFaceSetupCamera()" hidden>Cancel</button>
                             </div>
-
+                            <div class="form-group face-setup-password">
+                                <label for="face-setup-password">Confirm password</label>
+                                <input type="password" id="face-setup-password" placeholder="Enter your current password" autocomplete="current-password">
+                            </div>
+                            <video id="face-setup-video" class="face-setup-video" autoplay muted playsinline hidden></video>
+                            <canvas id="face-setup-canvas" hidden></canvas>
+                            <div id="face-setup-status" class="settings-status face-setup-status">Face setup is ready.</div>
                         </div>
 
                         <div class="form-group" style="margin-top: 18px;">
@@ -8083,7 +8111,43 @@
                             </div>
                         </div>
 
-                        <div class="form-group">
+                        <div class="settings-toggle-list">
+                            <div class="settings-toggle-row" data-settings-roles="super_admin">
+                                <div class="settings-toggle-copy">
+                                    <strong>Generate video transcripts</strong>
+                                    <span>Create searchable text from newly uploaded video files so those files can be used in AI Buzz and document workflows.</span>
+                                </div>
+                                <label class="settings-toggle-switch" aria-label="Toggle video transcript generation">
+                                    <input type="checkbox" id="setting-generate-video-transcripts">
+                                    <span class="settings-toggle-slider"></span>
+                                </label>
+                            </div>
+
+                            <div class="settings-toggle-row" data-settings-roles="admin,super_admin">
+                                <div class="settings-toggle-copy">
+                                    <strong>Save original documents</strong>
+                                    <span>Keep the original uploaded file alongside extracted data for future downloads, audits, and troubleshooting.</span>
+                                </div>
+                                <label class="settings-toggle-switch" aria-label="Toggle original file preservation">
+                                    <input type="checkbox" id="setting-save-original-documents">
+                                    <span class="settings-toggle-slider"></span>
+                                </label>
+                            </div>
+
+                            <div class="settings-toggle-row" data-settings-roles="admin,super_admin">
+                                <div class="settings-toggle-copy">
+                                    <strong>Face login</strong>
+                                    <span>Turn face login on or off for the whole application. When this is off, face login is hidden and blocked by the API.</span>
+                                </div>
+                                <label class="settings-toggle-switch" aria-label="Toggle face login">
+                                    <input type="checkbox" id="setting-face-auth-enabled">
+                                    <span class="settings-toggle-slider"></span>
+                                </label>
+                            </div>
+
+                        </div>
+
+                        <div class="form-group" data-settings-roles="admin,super_admin">
                             <label for="setting-allowed-user-email-domain">Allowed user email domain</label>
                             <input type="text" id="setting-allowed-user-email-domain" placeholder="megamaxservices.com" autocomplete="off">
                             <div style="margin-top: 8px; font-size: 12px; color: #6b7280;">
@@ -8091,7 +8155,7 @@
                             </div>
                         </div>
 
-                        <div id="settings-effective-summary" class="settings-summary-box">
+                        <div id="settings-effective-summary" class="settings-summary-box" data-settings-roles="admin,super_admin">
                             Current behavior will appear here once settings finish loading.
                         </div>
                     </div>
@@ -8620,9 +8684,11 @@
             generate_video_transcripts: true,
             save_original_documents: true,
             guided_tour_enabled: true,
+            face_auth_enabled: true,
             allowed_user_email_domain: 'megamaxservices.com'
         };
         let currentUserProfile = null;
+        let faceSetupStream = null;
         let onboardingAutostartQueued = false;
         const onboardingState = {
             active: false,
@@ -9722,6 +9788,7 @@
                 generate_video_transcripts: payload.generate_video_transcripts !== false,
                 save_original_documents: payload.save_original_documents !== false,
                 guided_tour_enabled: true,
+                face_auth_enabled: payload.face_auth_enabled !== false,
                 allowed_user_email_domain: String(payload.allowed_user_email_domain || 'megamaxservices.com').trim().replace(/^@+/, '').toLowerCase()
             };
         }
@@ -9746,13 +9813,18 @@
             systemSettingsCache = normalizeSystemSettings(payload);
             if (currentUserProfile) {
                 currentUserProfile.guided_tour_enabled = systemSettingsCache.guided_tour_enabled;
+                currentUserProfile.face_auth_enabled = systemSettingsCache.face_auth_enabled;
             }
+            syncSettingsRoleVisibility();
+            syncFaceSetupAvailability();
 
             const videoToggle = document.getElementById('setting-generate-video-transcripts');
             const originalsToggle = document.getElementById('setting-save-original-documents');
+            const faceAuthToggle = document.getElementById('setting-face-auth-enabled');
             const domainInput = document.getElementById('setting-allowed-user-email-domain');
             if (videoToggle) videoToggle.checked = !!systemSettingsCache.generate_video_transcripts;
             if (originalsToggle) originalsToggle.checked = !!systemSettingsCache.save_original_documents;
+            if (faceAuthToggle) faceAuthToggle.checked = !!systemSettingsCache.face_auth_enabled;
             if (domainInput) domainInput.value = systemSettingsCache.allowed_user_email_domain || '';
 
             const summary = document.getElementById('settings-effective-summary');
@@ -9764,10 +9836,13 @@
                     ? 'Original uploaded files will be preserved for new pipeline runs.'
                     : 'Original uploaded files will not be preserved for new pipeline runs; only extracted data will remain in the database.';
                 const guidedTourText = 'The guided tour opens automatically on a user first login only; users can replay it from Settings.';
+                const faceAuthText = systemSettingsCache.face_auth_enabled
+                    ? 'Face login is available on the login page for enrolled users.'
+                    : 'Face login is disabled and hidden from the login page.';
                 const domainText = systemSettingsCache.allowed_user_email_domain
                     ? `New user email addresses must end with @${systemSettingsCache.allowed_user_email_domain}.`
                     : 'No user email domain restriction is configured.';
-                summary.innerHTML = `<strong>Current behavior:</strong><br>${escapeHtml(videoText)}<br>${escapeHtml(originalsText)}<br>${escapeHtml(guidedTourText)}<br>${escapeHtml(domainText)}`;
+                summary.innerHTML = `<strong>Current behavior:</strong><br>${escapeHtml(videoText)}<br>${escapeHtml(originalsText)}<br>${escapeHtml(guidedTourText)}<br>${escapeHtml(faceAuthText)}<br>${escapeHtml(domainText)}`;
             }
 
             const uploadSummary = document.getElementById('upload-settings-summary');
@@ -9778,6 +9853,7 @@
                         <strong>Current pipeline settings</strong><br>
                         Video text generation: ${systemSettingsCache.generate_video_transcripts ? 'On' : 'Off'}<br>
                         Save original document: ${systemSettingsCache.save_original_documents ? 'On' : 'Off'}<br>
+                        Face login: ${systemSettingsCache.face_auth_enabled ? 'On' : 'Off'}<br>
                         User email domain: @${escapeHtml(systemSettingsCache.allowed_user_email_domain || 'megamaxservices.com')}
                     `;
                 } else {
@@ -9791,6 +9867,166 @@
 
             renderCreateUserDomainHint();
             syncGuidedTourAvailability();
+        }
+
+        function getCurrentSettingsRole() {
+            return String(localStorage.getItem('userRole') || currentUserProfile?.role || 'employee').trim().toLowerCase();
+        }
+
+        function isSettingsRoleAllowed(roleList = '') {
+            const role = getCurrentSettingsRole();
+            const allowed = String(roleList || '').split(',').map((item) => item.trim()).filter(Boolean);
+            return allowed.includes('all') || allowed.includes(role);
+        }
+
+        function syncSettingsRoleVisibility() {
+            document.querySelectorAll('[data-settings-roles]').forEach((element) => {
+                element.hidden = !isSettingsRoleAllowed(element.dataset.settingsRoles);
+            });
+        }
+
+        function setFaceSetupStatus(message, tone = 'info') {
+            const box = document.getElementById('face-setup-status');
+            if (!box) return;
+            const styles = {
+                info: { background: '#f8fafc', color: '#334155', border: '#cbd5e1' },
+                success: { background: '#ecfdf5', color: '#166534', border: '#86efac' },
+                warning: { background: '#fff7ed', color: '#9a3412', border: '#fdba74' },
+                error: { background: '#fef2f2', color: '#991b1b', border: '#fca5a5' }
+            };
+            const style = styles[tone] || styles.info;
+            box.style.background = style.background;
+            box.style.color = style.color;
+            box.style.border = `1px solid ${style.border}`;
+            box.textContent = message;
+        }
+
+        function syncFaceSetupAvailability() {
+            const enabled = systemSettingsCache.face_auth_enabled !== false;
+            const startBtn = document.getElementById('face-setup-start-btn');
+            const passwordInput = document.getElementById('face-setup-password');
+            if (startBtn) startBtn.disabled = !enabled;
+            if (passwordInput) passwordInput.disabled = !enabled;
+            if (!enabled) {
+                stopFaceSetupCamera();
+                setFaceSetupStatus('Face login is currently off. Ask an Admin or Super Admin to enable it from System Settings.', 'warning');
+            } else {
+                setFaceSetupStatus('Enter your current password, start the camera, then capture your face to set up face login.', 'info');
+            }
+        }
+
+        function stopFaceSetupCamera() {
+            if (faceSetupStream) {
+                faceSetupStream.getTracks().forEach((track) => track.stop());
+                faceSetupStream = null;
+            }
+            const video = document.getElementById('face-setup-video');
+            const startBtn = document.getElementById('face-setup-start-btn');
+            const captureBtn = document.getElementById('face-setup-capture-btn');
+            const cancelBtn = document.getElementById('face-setup-cancel-btn');
+            if (video) {
+                video.srcObject = null;
+                video.hidden = true;
+            }
+            if (startBtn) startBtn.hidden = false;
+            if (captureBtn) captureBtn.hidden = true;
+            if (cancelBtn) cancelBtn.hidden = true;
+        }
+
+        async function startFaceSetupFromSettings() {
+            if (systemSettingsCache.face_auth_enabled === false) {
+                syncFaceSetupAvailability();
+                return;
+            }
+            if (!navigator.mediaDevices?.getUserMedia) {
+                setFaceSetupStatus('Camera access is not supported in this browser.', 'error');
+                return;
+            }
+            const video = document.getElementById('face-setup-video');
+            const startBtn = document.getElementById('face-setup-start-btn');
+            const captureBtn = document.getElementById('face-setup-capture-btn');
+            const cancelBtn = document.getElementById('face-setup-cancel-btn');
+            if (!video) return;
+            try {
+                stopFaceSetupCamera();
+                setFaceSetupStatus('Opening camera...', 'info');
+                faceSetupStream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } },
+                    audio: false
+                });
+                video.srcObject = faceSetupStream;
+                video.hidden = false;
+                await video.play();
+                if (startBtn) startBtn.hidden = true;
+                if (captureBtn) captureBtn.hidden = false;
+                if (cancelBtn) cancelBtn.hidden = false;
+                setFaceSetupStatus('Camera ready. Look straight at the camera and capture your face.', 'success');
+            } catch (error) {
+                setFaceSetupStatus(error.message || 'Could not open the camera.', 'error');
+            }
+        }
+
+        function captureFaceSetupImage() {
+            const video = document.getElementById('face-setup-video');
+            const canvas = document.getElementById('face-setup-canvas');
+            if (!video || !canvas || !video.videoWidth) {
+                throw new Error('Camera is not ready yet.');
+            }
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const context = canvas.getContext('2d');
+            context.drawImage(video, 0, 0, canvas.width, canvas.height);
+            return canvas.toDataURL('image/jpeg', 0.9);
+        }
+
+        function waitForFaceSetup(ms) {
+            return new Promise((resolve) => window.setTimeout(resolve, ms));
+        }
+
+        async function captureFaceSetupImages(count = 3) {
+            const images = [];
+            for (let index = 0; index < count; index += 1) {
+                images.push(captureFaceSetupImage());
+                if (index < count - 1) {
+                    await waitForFaceSetup(350);
+                }
+            }
+            return images;
+        }
+
+        async function captureFaceSetupFromSettings() {
+            const passwordInput = document.getElementById('face-setup-password');
+            const captureBtn = document.getElementById('face-setup-capture-btn');
+            const password = String(passwordInput?.value || '');
+            const email = String(currentUserProfile?.email || currentUserProfile?.username || '').trim().toLowerCase();
+            if (!password) {
+                setFaceSetupStatus('Enter your current password before saving face login.', 'error');
+                passwordInput?.focus();
+                return;
+            }
+            try {
+                if (captureBtn) captureBtn.disabled = true;
+                setFaceSetupStatus('Capturing secure face samples...', 'info');
+                const images = await captureFaceSetupImages(3);
+                setFaceSetupStatus('Saving face login setup...', 'info');
+                const response = await fetch(`${API_URL}/auth/face/enroll`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password, images })
+                });
+                const data = await parseApiJson(response);
+                passwordInput.value = '';
+                stopFaceSetupCamera();
+                setFaceSetupStatus(data.message || 'Face login setup completed.', 'success');
+                await showAppAlert(data.message || 'Face login setup completed.', {
+                    title: 'Face Login Ready',
+                    badge: '✅'
+                });
+            } catch (error) {
+                setFaceSetupStatus(error.message || 'Face login setup failed.', 'error');
+            } finally {
+                if (captureBtn) captureBtn.disabled = false;
+            }
         }
 
         function renderCreateUserDomainHint() {
@@ -9901,11 +10137,6 @@
         }
 
         async function loadSystemSettings(force = false) {
-            const userRole = localStorage.getItem('userRole') || 'employee';
-            if (!['admin', 'super_admin'].includes(userRole)) {
-                renderSystemSettingsPanel(systemSettingsCache);
-                return systemSettingsCache;
-            }
             if (!force) {
                 renderSystemSettingsPanel(systemSettingsCache);
             }
@@ -9925,9 +10156,10 @@
         async function saveSystemSettings() {
             const videoToggle = document.getElementById('setting-generate-video-transcripts');
             const originalsToggle = document.getElementById('setting-save-original-documents');
+            const faceAuthToggle = document.getElementById('setting-face-auth-enabled');
             const domainInput = document.getElementById('setting-allowed-user-email-domain');
             const saveBtn = document.getElementById('settings-save-btn');
-            if (!videoToggle || !originalsToggle || !domainInput || !saveBtn) return;
+            if (!videoToggle || !originalsToggle || !faceAuthToggle || !domainInput || !saveBtn) return;
 
             const normalizedDomain = String(domainInput.value || '').trim().replace(/^@+/, '').toLowerCase();
             if (!normalizedDomain) {
@@ -9940,6 +10172,7 @@
                 generate_video_transcripts: !!videoToggle.checked,
                 save_original_documents: !!originalsToggle.checked,
                 guided_tour_enabled: true,
+                face_auth_enabled: !!faceAuthToggle.checked,
                 allowed_user_email_domain: normalizedDomain
             };
 
@@ -11085,7 +11318,7 @@
             gem: ['all'],
             employeeProfiles: ['manager', 'admin', 'super_admin'],
             users: ['manager', 'admin', 'super_admin'],
-            settings: ['admin', 'super_admin'],
+            settings: ['all'],
             auditlog: ['super_admin'],
             logout: ['all'],
         };
@@ -11221,19 +11454,16 @@
                     localStorage.setItem('allowedUserEmailDomain', systemSettingsCache.allowed_user_email_domain);
                 }
                 systemSettingsCache.guided_tour_enabled = userData.guided_tour_enabled !== false;
+                systemSettingsCache.face_auth_enabled = userData.face_auth_enabled !== false;
                 console.log(`User role set to: ${userData.role}`);
                 
                 // Update menu visibility based on role
                 updateMenuVisibility(userData.role);
                 updateCreateUserRoleOptions(userData.role, userData.creatable_roles || []);
-                if (['admin', 'super_admin'].includes(userData.role)) {
-                    try {
-                        await loadSystemSettings(true);
-                    } catch (settingsError) {
-                        console.warn('Unable to preload system settings:', settingsError);
-                        renderSystemSettingsPanel(systemSettingsCache);
-                    }
-                } else {
+                try {
+                    await loadSystemSettings(true);
+                } catch (settingsError) {
+                    console.warn('Unable to preload system settings:', settingsError);
                     renderSystemSettingsPanel(systemSettingsCache);
                 }
             } catch (error) {

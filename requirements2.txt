@@ -11,6 +11,10 @@ google-genai==1.70.0
 pymongo==4.16.0
 pandas==2.2.3
 openpyxl==3.1.5
+onnx==1.21.0
+onnxruntime==1.23.2
+scikit-learn==1.7.2
+scipy==1.15.3
 python-docx==1.1.0
 python-pptx==0.6.23
 beautifulsoup4==4.14.3

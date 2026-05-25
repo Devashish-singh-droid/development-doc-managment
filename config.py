@@ -89,6 +89,7 @@ class _Settings:
         self._generate_video_transcripts = self._read_bool("GENERATE_VIDEO_TRANSCRIPTS", True)
         self._save_original_documents = self._read_bool("SAVE_ORIGINAL_DOCUMENTS", True)
         self._guided_tour_enabled = self._read_bool("GUIDED_TOUR_ENABLED", True)
+        self._face_auth_enabled = self._read_bool("FACE_AUTH_ENABLED", True)
 
     def _normalize_key(self, key: str) -> str:
         return str(key or "").strip().upper()
@@ -604,6 +605,15 @@ class _Settings:
     def guided_tour_enabled(self, value: bool) -> None:
         self._guided_tour_enabled = bool(value)
         self._set_env("GUIDED_TOUR_ENABLED", self._guided_tour_enabled)
+
+    @property
+    def face_auth_enabled(self) -> bool:
+        return self._face_auth_enabled
+
+    @face_auth_enabled.setter
+    def face_auth_enabled(self, value: bool) -> None:
+        self._face_auth_enabled = bool(value)
+        self._set_env("FACE_AUTH_ENABLED", self._face_auth_enabled)
 
 
 settings = _Settings()
