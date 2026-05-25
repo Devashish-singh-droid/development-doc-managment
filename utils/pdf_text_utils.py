@@ -1,4 +1,6 @@
 from dataclasses import dataclass
+from contextlib import redirect_stdout
+import io
 from pathlib import Path
 from typing import Iterable, List, Optional
 from urllib.parse import unquote, urlparse
@@ -28,17 +30,72 @@ def pdf_has_selectable_text(pdf_path):
 
 # Utility to extract all selectable text from PDF
 def extract_pdf_text(pdf_path):
-    all_text = ""
+    sections = []
     try:
         with fitz.open(pdf_path) as doc:
-            for page in doc:
+            for page_number, page in enumerate(doc, start=1):
                 text = page.get_text()
-                if not text:
-                    continue
-                all_text += text + "\n"
-        return all_text.strip()
+                page_sections = []
+                if text:
+                    page_sections.append(text.strip())
+
+                table_text = _extract_page_tables_text(page, page_number)
+                if table_text:
+                    page_sections.append(table_text)
+
+                if page_sections:
+                    sections.append("\n\n".join(page_sections))
+        return "\n\n".join(sections).strip()
     except Exception:
-        return all_text.strip()
+        return "\n\n".join(sections).strip()
+
+
+def _extract_page_tables_text(page, page_number: int) -> str:
+    try:
+        with redirect_stdout(io.StringIO()):
+            table_finder = page.find_tables()
+    except Exception:
+        return ""
+
+    table_sections = []
+    for table_index, table in enumerate(getattr(table_finder, "tables", []) or [], start=1):
+        try:
+            rows = table.extract()
+        except Exception:
+            continue
+
+        normalized_rows = [
+            ["" if cell is None else str(cell).replace("\n", " ").strip() for cell in row]
+            for row in (rows or [])
+            if row
+        ]
+        normalized_rows = [row for row in normalized_rows if any(row)]
+        if not normalized_rows:
+            continue
+
+        max_cols = max(len(row) for row in normalized_rows)
+        padded_rows = [row + [""] * (max_cols - len(row)) for row in normalized_rows]
+        header = padded_rows[0]
+        body = padded_rows[1:]
+
+        markdown_rows = [
+            "| " + " | ".join(_escape_markdown_table_cell(cell) for cell in header) + " |",
+            "| " + " | ".join("---" for _ in header) + " |",
+        ]
+        markdown_rows.extend(
+            "| " + " | ".join(_escape_markdown_table_cell(cell) for cell in row) + " |"
+            for row in body
+        )
+        table_sections.append(
+            f"--- EXTRACTED TABLE {table_index} ON PAGE {page_number} ---\n"
+            + "\n".join(markdown_rows)
+        )
+
+    return "\n\n".join(table_sections)
+
+
+def _escape_markdown_table_cell(value: str) -> str:
+    return str(value).replace("|", "\\|")
 
 
 def extract_pdf_link_targets(

@@ -1,24 +1,28 @@
 """
 GEM (Goods and Services Exchange Model) PDF Processing Module
 """
-from uuid import uuid4
-from copy import copy
+from __future__ import annotations
 
-import requests
+import hashlib
+import json
+import os
+import re
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from copy import copy
+from typing import Any, Dict, List, Optional, Tuple, TypedDict
+from uuid import uuid4
+import fitz
+import requests
+from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
-from utils.logger import get_logger
-from typing import Dict, Any, List, TypedDict, Optional
-import os
-import fitz
-import json
-from langgraph.graph import StateGraph
 from langgraph.checkpoint.memory import MemorySaver
-from bs4 import BeautifulSoup
-import re
-import hashlib
+from langgraph.graph import StateGraph
+from rapidfuzz import fuzz
+from utils.logger import get_logger
+
 
 logger = get_logger('gem')
 load_dotenv()
@@ -41,7 +45,7 @@ class ChunkProcessingState(TypedDict):
 # Text Chunking
 # ---------------------------------------------------------------------------
 
-def chunk_text(text: str, chunk_size: int = 180000, overlap: int = 500) -> List[str]:
+def split_text_into_chunks(text: str, chunk_size: int = 180000, overlap: int = 500) -> List[str]:
     chunks = []
     start = 0
     while start < len(text):
@@ -64,35 +68,29 @@ def _find_sheet(wb, target_name: str):
             return wb[name]
     return None
 
+
 # ---------------------------------------------------------------------------
 # OCR helper for scanned PDFs
 # ---------------------------------------------------------------------------
+
 def _ocr_pdf_bytes(pdf_bytes: bytes, url: str) -> str:
     """
     Render each PDF page to image using PyMuPDF, then OCR with shared PaddleOCR helper.
     Returns extracted text, or empty string if OCR fails.
     """
     def _extract_page_text(result: Any) -> str:
-        """
-        Normalize OCR output defensively inside GEM so linked-PDF extraction
-        still works even if the shared OCR helper returns a slightly different shape.
-        """
         if not result:
             return ""
-
         if isinstance(result, dict):
             raw_text = str(result.get("raw_text") or "").strip()
             if raw_text:
                 return raw_text
-
             rec_texts = result.get("rec_texts")
             if isinstance(rec_texts, list):
                 return "\n".join(str(item).strip() for item in rec_texts if str(item).strip()).strip()
-
             text = str(result.get("text") or "").strip()
             if text:
                 return text
-
         if hasattr(result, "get"):
             try:
                 raw_text = str(result.get("raw_text") or "").strip()
@@ -100,7 +98,6 @@ def _ocr_pdf_bytes(pdf_bytes: bytes, url: str) -> str:
                     return raw_text
             except Exception:
                 pass
-
         if isinstance(result, list):
             lines = []
             for item in result:
@@ -109,12 +106,10 @@ def _ocr_pdf_bytes(pdf_bytes: bytes, url: str) -> str:
                     if text:
                         lines.append(text)
                         continue
-
                     rec_texts = item.get("rec_texts")
                     if isinstance(rec_texts, list):
                         lines.extend(str(text).strip() for text in rec_texts if str(text).strip())
                         continue
-
                 if isinstance(item, (list, tuple)) and len(item) >= 2:
                     candidate = item[1]
                     if isinstance(candidate, (list, tuple)) and candidate:
@@ -122,13 +117,10 @@ def _ocr_pdf_bytes(pdf_bytes: bytes, url: str) -> str:
                         if text:
                             lines.append(text)
                             continue
-
                 text = str(item or "").strip()
                 if text and text not in {"[]", "{}"}:
                     lines.append(text)
-
             return "\n".join(lines).strip()
-
         return ""
 
     try:
@@ -142,52 +134,95 @@ def _ocr_pdf_bytes(pdf_bytes: bytes, url: str) -> str:
     try:
         with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
             page_count = doc.page_count
-            logger.info(f"[GEM][OCR] Starting PaddleOCR on {page_count} pages | URL: {url}")
+            logger.info(f"[GEM][OCR] Starting PyMuPDF text extraction on {page_count} pages | URL: {url}")
 
             for page_no in range(page_count):
                 page = doc.load_page(page_no)
-                mat = fitz.Matrix(2.0, 2.0)  # 2x zoom for better accuracy
-                pix = page.get_pixmap(matrix=mat)
-
-                mode = "RGBA" if pix.n == 4 else "RGB"
-                img = Image.frombytes(mode, [pix.width, pix.height], pix.samples)
-                if mode == "RGBA":
-                    img = img.convert("RGB")
-
-                result = paddle_ocr_extract(img)
-                page_text = _extract_page_text(result)
-                if page_text:
-                    text_parts.append(page_text)
+                page_parts = []
+                try:
+                    tabs = page.find_tables()
+                    for tab in tabs:
+                        df = tab.to_pandas()
+                        if not df.empty:
+                            page_parts.append(df.to_csv(index=False, sep="|"))
+                except Exception:
+                    pass
+                plain = page.get_text("text").strip()
+                if plain:
+                    page_parts.append(plain)
+                if page_parts:
+                    text_parts.append("\n".join(page_parts))
                     logger.info(
                         f"[GEM][OCR] Page {page_no + 1}/{page_count} - "
-                        f"{len(page_text)} chars extracted"
+                        f"{len(page_parts)} content parts extracted (PyMuPDF)"
                     )
                 else:
                     logger.warning(
                         f"[GEM][OCR] Page {page_no + 1}/{page_count} - "
-                        f"no text detected | result_type={type(result).__name__}"
+                        f"no text detected via PyMuPDF"
                     )
 
-        result_text = "\n\n".join(text_parts).strip()
+        pymupdf_text = "\n\n".join(text_parts).strip()
         logger.info(
-            f"[GEM][OCR] PaddleOCR complete - {len(result_text)} chars "
+            f"[GEM][OCR] PyMuPDF complete - {len(pymupdf_text)} chars "
             f"from {page_count} pages | URL: {url}"
         )
-        return result_text
+
+        if pymupdf_text and len(pymupdf_text) > 0:
+            return pymupdf_text
+
+        logger.warning(
+            f"[GEM][OCR] PyMuPDF returned 0 chars — falling back to PaddleOCR per-page extraction | URL: {url}"
+        )
+        try:
+            from PIL import Image
+            from ocr.paddle_ocr_engine import paddle_ocr_extract
+        except Exception as exc:
+            logger.warning(f"[GEM][OCR] Shared PaddleOCR engine unavailable: {exc}")
+            return ""
+
+        ocr_parts = []
+        with fitz.open(stream=pdf_bytes, filetype="pdf") as ocr_doc:
+            for page_no in range(ocr_doc.page_count):
+                page = ocr_doc.load_page(page_no)
+                mat = fitz.Matrix(2.0, 2.0)
+                pix = page.get_pixmap(matrix=mat)
+                mode = "RGBA" if pix.n == 4 else "RGB"
+                img = Image.frombytes(mode, [pix.width, pix.height], pix.samples)
+                if mode == "RGBA":
+                    img = img.convert("RGB")
+                result = paddle_ocr_extract(img)
+                page_text = _extract_page_text(result)
+                if page_text:
+                    ocr_parts.append(page_text)
+                    logger.info(
+                        f"[GEM][OCR] Page {page_no + 1}/{page_count} - "
+                        f"{len(page_text)} chars extracted (PaddleOCR)"
+                    )
+                else:
+                    logger.warning(
+                        f"[GEM][OCR] Page {page_no + 1}/{page_count} - "
+                        f"no text detected via PaddleOCR | result_type={type(result).__name__}"
+                    )
+
+        ocr_result = "\n\n".join(ocr_parts).strip()
+        logger.info(
+            f"[GEM][OCR] PaddleOCR fallback complete - {len(ocr_result)} chars "
+            f"from {page_count} pages | URL: {url}"
+        )
+        return ocr_result
 
     except Exception as e:
-        logger.error(f"[GEM][OCR] PaddleOCR failed: {e} | URL: {url}")
+        logger.error(f"[GEM][OCR] Text extraction failed: {e} | URL: {url}")
         return ""
 
+
 # ---------------------------------------------------------------------------
-# HTML scraping Ã¢â‚¬â€ find PDF links inside HTML pages
+# HTML scraping find PDF links inside HTML pages
+# HTML scraping — find PDF links inside HTML pages
 # ---------------------------------------------------------------------------
 
 def _extract_pdf_links_from_html(html_content: bytes, base_url: str) -> List[str]:
-    """
-    Parse an HTML page and return all URLs that point to PDFs.
-    Checks anchor/iframe/embed/object tags and raw URL regex.
-    """
     from urllib.parse import urljoin
 
     soup     = BeautifulSoup(html_content, "html.parser")
@@ -205,7 +240,6 @@ def _extract_pdf_links_from_html(html_content: bytes, base_url: str) -> List[str
                 pdf_urls.append(absolute)
                 logger.info(f"[GEM][HTML] Found PDF link in tag: {absolute}")
 
-    # Also scan raw text for PDF URLs
     raw_text = html_content.decode("utf-8", errors="ignore")
     pattern  = r'https?://[^\s\'"<>]+\.pdf[^\s\'"<>]*'
     for m in re.findall(pattern, raw_text, re.IGNORECASE):
@@ -223,10 +257,6 @@ def _extract_pdf_links_from_html(html_content: bytes, base_url: str) -> List[str
 # ---------------------------------------------------------------------------
 
 def _download_and_extract_pdf(url: str, prefetched_bytes: Optional[bytes] = None) -> str:
-    """
-    Extract text from a direct PDF URL (or pre-downloaded bytes).
-    Automatically falls back to OCR if text extraction yields 0 chars.
-    """
     temp_path = None
     try:
         if prefetched_bytes is not None:
@@ -238,40 +268,52 @@ def _download_and_extract_pdf(url: str, prefetched_bytes: Optional[bytes] = None
             pdf_bytes = resp.content
             logger.info(f"[GEM][PDF] Downloaded {len(pdf_bytes)} bytes | URL: {url}")
 
-        # Write to temp file
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
             tmp.write(pdf_bytes)
             temp_path = tmp.name
 
-        # Normal text extraction
         full_text  = []
         page_count = 0
         try:
             with fitz.open(temp_path) as doc:
                 page_count = doc.page_count
                 for page_no in range(page_count):
-                    page_text = doc.load_page(page_no).get_text("text")
-                    if page_text and page_text.strip():
-                        full_text.append(page_text.strip())
+                    page = doc.load_page(page_no)
+                    page_parts = []
+
+                    # Extract tables first — preserves row/column structure
+                    try:
+                        tabs = page.find_tables()
+                        for tab in tabs:
+                            df = tab.to_pandas()
+                            if not df.empty:
+                                page_parts.append(df.to_csv(index=False, sep="|"))
+                    except Exception:
+                        pass
+
+                    # Extract remaining plain text (non-table regions)
+                    plain = page.get_text("text").strip()
+                    if plain:
+                        page_parts.append(plain)
+
+                    if page_parts:
+                        full_text.append("\n".join(page_parts))
         except fitz.FileDataError as e:
             logger.error(f"[GEM][PDF] Invalid PDF: {e} | URL: {url}")
-            return f"Error: Invalid PDF Ã¢â‚¬â€ {str(e)}"
+            return f"Error: Invalid PDF — {str(e)}"
 
         extracted  = "\n".join(full_text).strip()
         char_count = len(extracted)
-        logger.info(f"[GEM][PDF] Extracted Ã¢â‚¬â€ Pages: {page_count}, Chars: {char_count} | URL: {url}")
+        logger.info(f"[GEM][PDF] Extracted — Pages: {page_count}, Chars: {char_count} | URL: {url}")
 
-        # Scanned PDF: 0 chars Ã¢â€ â€™ OCR
         if char_count == 0 and page_count > 0:
-            logger.warning(
-                f"[GEM][PDF] Zero chars from {page_count} pages Ã¢â‚¬â€ trying OCR | URL: {url}"
-            )
+            logger.warning(f"[GEM][PDF] Zero chars from {page_count} pages — trying OCR | URL: {url}")
             ocr_text = _ocr_pdf_bytes(pdf_bytes, url)
             if ocr_text:
-                logger.info(f"[GEM][PDF] OCR succeeded Ã¢â‚¬â€ {len(ocr_text)} chars | URL: {url}")
+                logger.info(f"[GEM][PDF] OCR succeeded — {len(ocr_text)} chars | URL: {url}")
                 return ocr_text
             else:
-                msg = f"Warning: zero chars even after OCR Ã¢â‚¬â€ scanned PDF or OCR not installed (pages: {page_count})"
+                msg = f"Warning: zero chars even after OCR — scanned PDF or OCR not installed (pages: {page_count})"
                 logger.warning(f"[GEM][PDF] {msg} | URL: {url}")
                 return msg
 
@@ -288,17 +330,10 @@ def _download_and_extract_pdf(url: str, prefetched_bytes: Optional[bytes] = None
 
 
 # ---------------------------------------------------------------------------
-# Link extractor Ã¢â‚¬â€ handles HTML pages, direct PDFs, scanned PDFs
+# Link extractor — handles HTML pages, direct PDFs, scanned PDFs
 # ---------------------------------------------------------------------------
 
 def extract_text_from_pdf_link(link: str) -> str:
-    """
-    Download a URL and extract text. Handles:
-      1. Direct PDF             Ã¢â€ â€™ text extraction (+ OCR fallback)
-      2. Scanned PDF (0 chars)  Ã¢â€ â€™ OCR via pytesseract
-      3. HTML page              Ã¢â€ â€™ scrape for embedded PDF links, recurse once
-      4. HTML with no PDFs      Ã¢â€ â€™ extract visible page text as last resort
-    """
     logger.info(f"[GEM][LINK] Attempting: {link}")
 
     try:
@@ -313,9 +348,8 @@ def extract_text_from_pdf_link(link: str) -> str:
 
         response.raise_for_status()
 
-        # Ã¢â€â‚¬Ã¢â€â‚¬ HTML page Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
         if "text/html" in content_type.lower():
-            logger.info(f"[GEM][LINK] HTML detected Ã¢â‚¬â€ scanning for embedded PDF links | URL: {link}")
+            logger.info(f"[GEM][LINK] HTML detected — scanning for embedded PDF links | URL: {link}")
             pdf_links = _extract_pdf_links_from_html(response.content, link)
 
             if pdf_links:
@@ -336,7 +370,6 @@ def extract_text_from_pdf_link(link: str) -> str:
                 else:
                     logger.warning(f"[GEM][LINK] PDF links found but all failed to extract | URL: {link}")
 
-            # Fallback: visible text from the HTML page itself
             soup      = BeautifulSoup(response.content, "html.parser")
             html_text = soup.get_text(separator="\n", strip=True)
             if html_text and len(html_text) > 100:
@@ -345,7 +378,6 @@ def extract_text_from_pdf_link(link: str) -> str:
 
             return f"Skipped: HTML page with no useful PDF or text content"
 
-        # Ã¢â€â‚¬Ã¢â€â‚¬ PDF response Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
         is_pdf = "pdf" in content_type.lower() or ".pdf" in link.lower()
         if not is_pdf:
             msg = f"Skipped: unrecognized content-type '{content_type}'"
@@ -355,11 +387,11 @@ def extract_text_from_pdf_link(link: str) -> str:
         return _download_and_extract_pdf(link, prefetched_bytes=response.content)
 
     except requests.exceptions.SSLError as e:
-        msg = f"Error: SSL failed Ã¢â‚¬â€ {str(e)}"
+        msg = f"Error: SSL failed — {str(e)}"
         logger.error(f"[GEM][LINK] {msg} | URL: {link}")
         return msg
     except requests.exceptions.ConnectionError as e:
-        msg = f"Error: Connection failed Ã¢â‚¬â€ {str(e)}"
+        msg = f"Error: Connection failed — {str(e)}"
         logger.error(f"[GEM][LINK] {msg} | URL: {link}")
         return msg
     except requests.exceptions.Timeout:
@@ -367,7 +399,7 @@ def extract_text_from_pdf_link(link: str) -> str:
         logger.error(f"[GEM][LINK] {msg} | URL: {link}")
         return msg
     except requests.exceptions.HTTPError as e:
-        msg = f"Error: HTTP {response.status_code} Ã¢â‚¬â€ {str(e)}"
+        msg = f"Error: HTTP {response.status_code} — {str(e)}"
         logger.error(f"[GEM][LINK] {msg} | URL: {link}")
         return msg
     except Exception as e:
@@ -389,9 +421,23 @@ def extract_pdf_text_and_links(file_path: str) -> Dict[str, Any]:
         page_count = doc.page_count
         for page_no in range(page_count):
             page = doc.load_page(page_no)
-            text = page.get_text("text")
-            if text:
-                full_text.append(text.strip())
+            page_parts = []
+
+            try:
+                tabs = page.find_tables()
+                for tab in tabs:
+                    df = tab.to_pandas()
+                    if not df.empty:
+                        page_parts.append(df.to_csv(index=False, sep="|"))
+            except Exception:
+                pass
+
+            plain = page.get_text("text").strip()
+            if plain:
+                page_parts.append(plain)
+
+            if page_parts:
+                full_text.append("\n".join(page_parts))
             for link in page.get_links():
                 uri = link.get("uri")
                 if uri:
@@ -413,7 +459,7 @@ def extract_pdf_text_and_links(file_path: str) -> Dict[str, Any]:
 # Main entry point
 # ---------------------------------------------------------------------------
 
-def gem_processing(file_path: str) -> Dict[str, Any]:
+def process_gem_document(file_path: str) -> Dict[str, Any]:
     logger.info(f"[GEM] Starting with file_path: {file_path}")
 
     try:
@@ -428,11 +474,16 @@ def gem_processing(file_path: str) -> Dict[str, Any]:
 
     logger.info(f"[GEM] Main PDF: {len(text)} chars, {len(links)} links found")
 
-    # Download and extract linked PDFs
-    sub_pdf_texts = []
-    link_summary  = []
-    duplicate_links_skipped = 0
-    seen_link_content_hashes = set()
+    # ------------------------------------------------------------------
+    # Download and extract each linked PDF individually.
+    # Each valid (non-empty, non-duplicate) sub-PDF is stored separately
+    # so we can feed them to the LLM one-by-one and write a distinct
+    # Annexure sheet per PDF.
+    # ------------------------------------------------------------------
+    sub_pdfs: List[Dict[str, Any]] = []   # [{link, text, index}]
+    link_summary: List[Dict]       = []
+    duplicate_links_skipped        = 0
+    seen_link_content_hashes       = set()
 
     for idx, link in enumerate(links):
         logger.info(f"[GEM][LINK] Processing link {idx + 1}/{len(links)}: {link}")
@@ -442,73 +493,164 @@ def gem_processing(file_path: str) -> Dict[str, Any]:
             or extracted.startswith("Skipped:")
             or extracted.startswith("Warning:")
         )
+
         if is_failure:
             link_summary.append({"link": link, "status": "failed", "detail": extracted, "chars": 0})
             logger.warning(f"[GEM][LINK] Link {idx + 1} FAILED: {extracted}")
-        else:
-            char_count = len(extracted)
-            content_hash = hashlib.sha256(extracted.encode("utf-8", errors="ignore")).hexdigest()
-            is_duplicate_content = content_hash in seen_link_content_hashes
-            if not is_duplicate_content:
-                seen_link_content_hashes.add(content_hash)
+            continue
 
-            if is_duplicate_content:
-                duplicate_links_skipped += 1
-                link_summary.append({
-                    "link": link,
-                    "status": "duplicate_skipped",
-                    "chars": char_count,
-                })
-                logger.info(
-                    f"[GEM][LINK] Link {idx + 1} DUPLICATE CONTENT - skipped ({char_count} chars)"
-                )
-            else:
-                link_summary.append({"link": link, "status": "success", "chars": char_count})
-                sub_pdf_texts.append(extracted)
-                logger.info(f"[GEM][LINK] Link {idx + 1} SUCCESS - {char_count} chars")
+        char_count   = len(extracted)
+        content_hash = hashlib.sha256(extracted.encode("utf-8", errors="ignore")).hexdigest()
+
+        if content_hash in seen_link_content_hashes:
+            duplicate_links_skipped += 1
+            link_summary.append({"link": link, "status": "duplicate_skipped", "chars": char_count})
+            logger.info(f"[GEM][LINK] Link {idx + 1} DUPLICATE CONTENT — skipped ({char_count} chars)")
+            continue
+
+        # Zero-char guard (extra safety after extraction)
+        if char_count == 0:
+            link_summary.append({"link": link, "status": "failed", "detail": "0 chars extracted", "chars": 0})
+            logger.warning(f"[GEM][LINK] Link {idx + 1} yielded 0 chars — skipped")
+            continue
+
+        seen_link_content_hashes.add(content_hash)
+        annexure_index = len(sub_pdfs) + 1
+        sub_pdfs.append({"link": link, "text": extracted, "index": annexure_index})
+        link_summary.append({"link": link, "status": "success", "chars": char_count, "annexure": annexure_index})
+        logger.info(f"[GEM][LINK] Link {idx + 1} SUCCESS — {char_count} chars → Annexure {annexure_index}")
 
     os.makedirs("gem-testing", exist_ok=True)
     with open("gem-testing/link_summary.json", "w", encoding="utf-8") as f:
         json.dump(link_summary, f, indent=4)
+    with open("gem-testing/sub_pdf_texts.txt", "w", encoding="utf-8") as f:
+        if not sub_pdfs:
+            f.write("No valid sub PDFs extracted.")
+        else:
+            for sub in sub_pdfs:
+                f.write(f"--- SUB PDF {sub['index']} ---\n")
+                f.write(f"Link: {sub['link']}\n\n")
+                f.write(sub["text"])
+                f.write("\n\n")
 
     successful = sum(1 for s in link_summary if s["status"] == "success")
-    failed = sum(1 for s in link_summary if s["status"] == "failed")
+    failed     = sum(1 for s in link_summary if s["status"] == "failed")
     logger.info(
-        f"[GEM][LINK] Summary - Total: {len(links)}, Success: {successful}, "
+        f"[GEM][LINK] Summary — Total: {len(links)}, Success: {successful}, "
         f"DuplicateSkipped: {duplicate_links_skipped}, Failed: {failed}"
     )
 
+    # ------------------------------------------------------------------
+    # Main PDF: LLM call 1 (Tender Checklist / Asset Details / Resource Cost)
+    # ------------------------------------------------------------------
     try:
         cell_map = LLM_processing(text)
-
-        if sub_pdf_texts:
-            logger.info(f"[GEM] Running call2 LLM on {len(sub_pdf_texts)} linked PDF(s)")
-            call2_results = call2_LLM_processing(sub_pdf_texts)
-
-            PRIORITY_SHEETS = ["Asset Details", "Resource Cost"]
-
-            #FORCE OVERRIDE (call2 always wins)
-            for sheet in PRIORITY_SHEETS:
-                if sheet in call2_results:
-                    logger.info(f"[GEM] FORCING sub PDF data for '{sheet}' (discarding call1)")
-                    cell_map[sheet] = call2_results[sheet]
-                    
-        # Normalize all sheet names by stripping whitespace
-        normalized_cell_map = {}
-        for key, value in cell_map.items():
-            normalized_key = key.strip()
-            if normalized_key in normalized_cell_map:
-                logger.warning(
-                    f"[GEM] Duplicate sheet key after normalization: '{normalized_key}' - "
-                    f"keeping later value from '{key}'"
-                )
-            normalized_cell_map[normalized_key] = value
-        
-        output_path = write_to_excel(normalized_cell_map)
-
     except Exception as e:
-        logger.error(f"[GEM] Processing failed: {e}")
+        logger.error(f"[GEM] LLM_processing (call1) failed: {e}")
         return {"status": "error", "message": f"Processing failed: {str(e)}"}
+
+    # ------------------------------------------------------------------
+    # Sub PDFs: one LLM call per PDF → force-override main sheets +
+    # create individual Annexure sheets
+    # ------------------------------------------------------------------
+    annexure_results: List[Dict[str, Any]] = []   # [{index, link, assets, resources}]
+
+    PRIORITY_SHEETS = ["Asset Details", "Resource Cost"]
+
+    for sub in sub_pdfs:
+        ann_idx  = sub["index"]
+        ann_link = sub["link"]
+        ann_text = sub["text"]
+
+        logger.info(
+            f"[GEM][CALL2] Processing Annexure {ann_idx} — "
+            f"{len(ann_text)} chars | {ann_link}"
+        )
+
+        try:
+            # call2 expects a list; wrap single PDF text
+            ann_result = call2_LLM_processing([ann_text])
+        except Exception as e:
+            logger.error(f"[GEM][CALL2] Annexure {ann_idx} failed: {e} | {ann_link}")
+            annexure_results.append({
+                "index":     ann_idx,
+                "link":      ann_link,
+                "assets":    [],
+                "resources": [],
+                "skipped":   True,
+                "reason":    str(e),
+            })
+            continue
+
+        assets    = ann_result.get("Asset Details", [])
+        resources = ann_result.get("Resource Cost", [])
+
+        # Nothing extracted → skip entirely, no Annexure sheet
+        if not assets and not resources:
+            logger.info(
+                f"[GEM][CALL2] Annexure {ann_idx} — LLM returned empty extraction, "
+                f"no sheet will be created | {ann_link}"
+            )
+            annexure_results.append({
+                "index":     ann_idx,
+                "link":      ann_link,
+                "assets":    [],
+                "resources": [],
+                "skipped":   True,
+                "reason":    "empty extraction",
+            })
+            continue
+
+        logger.info(
+            f"[GEM][CALL2] Annexure {ann_idx} — "
+            f"{len(assets)} assets, {len(resources)} resources | {ann_link}"
+        )
+
+        # Force-override the main sheets with the latest sub-PDF data
+        for sheet in PRIORITY_SHEETS:
+            if sheet in ann_result:
+                logger.info(
+                    f"[GEM] FORCE OVERRIDE '{sheet}' with Annexure {ann_idx} data"
+                )
+                cell_map[sheet] = ann_result[sheet]
+
+        annexure_results.append({
+            "index":     ann_idx,
+            "link":      ann_link,
+            "assets":    assets,
+            "resources": resources,
+            "skipped":   False,
+        })
+
+    # Persist annexure extraction summary for debugging
+    with open("gem-testing/annexure_results.json", "w", encoding="utf-8") as f:
+        json.dump(
+            [
+                {k: v for k, v in r.items() if k != "assets" and k != "resources"}
+                | {"asset_count": len(r.get("assets", [])), "resource_count": len(r.get("resources", []))}
+                for r in annexure_results
+            ],
+            f, indent=4,
+        )
+
+    # ------------------------------------------------------------------
+    # Normalize sheet names and write Excel
+    # ------------------------------------------------------------------
+    normalized_cell_map: Dict[str, Any] = {}
+    for key, value in cell_map.items():
+        normalized_key = key.strip()
+        if normalized_key in normalized_cell_map:
+            logger.warning(
+                f"[GEM] Duplicate sheet key after normalization: '{normalized_key}' — "
+                f"keeping later value from '{key}'"
+            )
+        normalized_cell_map[normalized_key] = value
+
+    try:
+        output_path = write_to_excel(normalized_cell_map, annexure_results)
+    except Exception as e:
+        logger.error(f"[GEM] write_to_excel failed: {e}")
+        return {"status": "error", "message": f"Excel write failed: {str(e)}"}
 
     return {
         "status":       "completed",
@@ -518,11 +660,19 @@ def gem_processing(file_path: str) -> Dict[str, Any]:
     }
 
 
+def gem_processing(file_path: str) -> Dict[str, Any]:
+    return process_gem_document(file_path)
+
+
+def LLM_processing(text: str) -> Dict[str, Any]:
+    return process_main_pdf_with_llm(text)
+
+
 # ---------------------------------------------------------------------------
 # LangGraph Chunk Processing
 # ---------------------------------------------------------------------------
 
-def process_single_chunk(state: ChunkProcessingState) -> ChunkProcessingState:
+def process_workflow_chunk(state: ChunkProcessingState) -> ChunkProcessingState:
     if state["current_chunk_index"] >= len(state["all_chunks"]):
         state["is_complete"] = True
         return state
@@ -571,8 +721,8 @@ TENDER CHECKLIST:
 Extract: tender number, bid date, customer/dept name, scope of work, duration, bid due date, EMD/PBG, delivery location, OEM/MAF requirements, compliance.
 
 ASSET DETAILS (plain array):
-- Normalize: "Laptops"Ã¢â€ â€™"Laptop", "Desktops"Ã¢â€ â€™"Desktop", "Printers"Ã¢â€ â€™"Printer"
-- Total qty rule: If total stated Ã¢â€ â€™ use total. If only model-wise Ã¢â€ â€™ sum them.
+- Normalize: "Laptops"→"Laptop", "Desktops"→"Desktop", "Printers"→"Printer"
+- Total qty rule: If total stated → use total. If only model-wise → sum them.
 - ONE entry per asset type. No duplicates.
 - Brand: null when using total qty. Set only if one clear brand dominates.
 - Types to capture: Desktop, Laptop, Printer, Scanner, Server, UPS, Network Switch, Mouse, Keyboard, Monitor, Webcam, Storage Device
@@ -633,9 +783,9 @@ Chunk {chunk_number}:
     return state
 
 
-def create_chunk_processing_workflow():
+def build_chunk_processing_workflow():
     workflow = StateGraph(ChunkProcessingState)
-    workflow.add_node("process_chunk", process_single_chunk)
+    workflow.add_node("process_chunk", process_workflow_chunk)
     workflow.set_entry_point("process_chunk")
 
     def should_continue(state: ChunkProcessingState) -> str:
@@ -657,7 +807,7 @@ def create_chunk_processing_workflow():
 # Schema extraction
 # ---------------------------------------------------------------------------
 
-def extract_master_schema_json() -> Dict:
+def extract_workbook_schema() -> Dict:
     import openpyxl
 
     file_path = r"templates/template.xlsx"
@@ -741,16 +891,17 @@ def extract_master_schema_json() -> Dict:
 
 
 # ---------------------------------------------------------------------------
-# LLM Processing
+# LLM Processing (call 1 — main PDF, full schema)
 # ---------------------------------------------------------------------------
 
-def LLM_processing(text: str) -> Dict:
-    schema = extract_master_schema_json()
-    chunks = chunk_text(text, chunk_size=180000, overlap=500)
+def process_main_pdf_with_llm(text: str) -> Dict:
+    schema = extract_workbook_schema()
+    chunks = split_text_into_chunks(text, chunk_size=180000, overlap=500)
 
     if not chunks:
         logger.error("[GEM] No chunks created from text")
         return {}
+
     llm = ChatGoogleGenerativeAI(
         model="gemini-2.5-pro",
         google_api_key=os.getenv("GEMINI_API_KEY"),
@@ -766,10 +917,10 @@ def LLM_processing(text: str) -> Dict:
         "is_complete":         False,
     }
 
-    graph  = create_chunk_processing_workflow()
+    graph  = build_chunk_processing_workflow()
     config = {"configurable": {"thread_id": f"gem-session-{uuid4().hex[:8]}"}}
 
-    logger.info(f"[GEM] Starting chunk processing Ã¢â‚¬â€ {len(chunks)} chunks")
+    logger.info(f"[GEM] Starting chunk processing — {len(chunks)} chunks")
 
     try:
         final_state = None
@@ -800,7 +951,6 @@ def LLM_processing(text: str) -> Dict:
 # ---------------------------------------------------------------------------
 
 def _find_resource_total_row(ws, start_row: int = 2) -> int:
-    """Find the row containing 'Total' in Resource Cost sheet."""
     for row in range(start_row, ws.max_row + 50):
         e_val = ws[f"E{row}"].value
         f_val = ws[f"F{row}"].value
@@ -812,21 +962,19 @@ def _find_resource_total_row(ws, start_row: int = 2) -> int:
 
 
 def _copy_row_style(ws, source_row: int, target_row: int, min_col: int = 1, max_col: int = 6):
-    """Copy formatting from one row to another."""
     for col in range(min_col, max_col + 1):
         src = ws.cell(row=source_row, column=col)
         dst = ws.cell(row=target_row, column=col)
         if src.has_style:
-            dst.font = copy(src.font)
-            dst.border = copy(src.border)
-            dst.fill = copy(src.fill)
+            dst.font       = copy(src.font)
+            dst.border     = copy(src.border)
+            dst.fill       = copy(src.fill)
             dst.number_format = copy(src.number_format)
             dst.protection = copy(src.protection)
-            dst.alignment = copy(src.alignment)
+            dst.alignment  = copy(src.alignment)
 
 
 def _write_resource_cost_sheet(ws, cells: Any) -> int:
-    """Write Resource Cost data with dynamic row insertion and formula preservation."""
     parsed_rows: Dict[int, Dict[str, Any]] = {}
 
     if isinstance(cells, list):
@@ -865,7 +1013,7 @@ def _write_resource_cost_sheet(ws, cells: Any) -> int:
         ws[f"E{total_row}"] = "Total"
 
     existing_capacity = max(0, total_row - data_start_row)
-    required_rows = len(source_rows)
+    required_rows     = len(source_rows)
     if required_rows > existing_capacity:
         extra_rows = required_rows - existing_capacity
         ws.insert_rows(total_row, amount=extra_rows)
@@ -875,8 +1023,7 @@ def _write_resource_cost_sheet(ws, cells: Any) -> int:
 
     for offset, src_row in enumerate(source_rows):
         target_row = data_start_row + offset
-        row_data = parsed_rows[src_row]
-
+        row_data   = parsed_rows[src_row]
         ws[f"A{target_row}"] = offset + 1
         ws[f"B{target_row}"] = row_data.get("B")
         ws[f"C{target_row}"] = row_data.get("C")
@@ -885,7 +1032,7 @@ def _write_resource_cost_sheet(ws, cells: Any) -> int:
         ws[f"F{target_row}"] = f"=D{target_row}*E{target_row}*12"
 
     first_data_row = data_start_row
-    last_data_row = data_start_row + required_rows - 1
+    last_data_row  = data_start_row + required_rows - 1
     ws[f"E{total_row}"] = "Total"
     ws[f"F{total_row}"] = f"=SUM(F{first_data_row}:F{last_data_row})"
 
@@ -893,10 +1040,189 @@ def _write_resource_cost_sheet(ws, cells: Any) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Annexure sheet writer
+# Writes assets table on top + resources table below in a fresh sheet.
+# ---------------------------------------------------------------------------
+
+def _write_annexure_sheet(wb, annexure_index: int, assets: List[dict], resources: List[dict]) -> str:
+    """
+    Create a new sheet named 'Annexure <N>' in the workbook and populate it
+    with the asset and resource data extracted from the corresponding sub-PDF.
+
+    Layout:
+      Row 1     : "Asset Details" section header
+      Row 2     : Column headers  (Sr No | Asset Type | Brand | Model | Details | Qty | Status | Remarks)
+      Row 3+    : Asset rows
+      (blank)
+      Next row  : "Resource Cost" section header
+      Next row+1: Column headers  (Sr No | Profile | Qualification | Qty | Per Month | For 12 Months)
+      Next row+2+: Resource rows
+      (blank)
+      Total row : Total formula for 12-month column
+
+    Returns the created sheet title.
+    """
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    sheet_title = f"Annexure {annexure_index}"
+    # Ensure title is unique (openpyxl truncates to 31 chars)
+    sheet_title = sheet_title[:31]
+    if sheet_title in wb.sheetnames:
+        sheet_title = f"Ann{annexure_index}_{uuid4().hex[:4]}"
+
+    ws = wb.create_sheet(title=sheet_title)
+
+    # ---- Style helpers ------------------------------------------------
+    header_font    = Font(name="Calibri", bold=True, color="FFFFFF", size=11)
+    section_font   = Font(name="Calibri", bold=True, size=12)
+    normal_font    = Font(name="Calibri", size=10)
+    center_align   = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    left_align     = Alignment(horizontal="left",   vertical="center", wrap_text=True)
+
+    blue_fill      = PatternFill("solid", fgColor="1F4E79")   # asset header
+    green_fill     = PatternFill("solid", fgColor="375623")   # resource header
+    section_fill   = PatternFill("solid", fgColor="D9E1F2")   # section title row
+
+    thin_side      = Side(style="thin", color="BFBFBF")
+    thin_border    = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+
+    def _style_header_cell(cell, fill):
+        cell.font      = header_font
+        cell.fill      = fill
+        cell.alignment = center_align
+        cell.border    = thin_border
+
+    def _style_section_cell(cell):
+        cell.font      = section_font
+        cell.fill      = section_fill
+        cell.alignment = left_align
+
+    def _style_data_cell(cell, align=None):
+        cell.font      = normal_font
+        cell.alignment = align or left_align
+        cell.border    = thin_border
+
+    current_row = 1
+
+    # ================================================================
+    # SECTION 1: ASSET DETAILS
+    # ================================================================
+    # Section header spanning all 8 columns
+    ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=8)
+    section_cell = ws.cell(row=current_row, column=1, value=f"Asset Details — Annexure {annexure_index}")
+    _style_section_cell(section_cell)
+    current_row += 1
+
+    # Column headers
+    asset_headers = ["Sr No", "Asset Type", "Brand", "Model", "Details", "Qty", "Status", "Remarks"]
+    for col_idx, header in enumerate(asset_headers, start=1):
+        cell = ws.cell(row=current_row, column=col_idx, value=header)
+        _style_header_cell(cell, blue_fill)
+    current_row += 1
+
+    # Asset data rows
+    if assets:
+        for asset in assets:
+            ws.cell(row=current_row, column=1, value=asset.get("sr_no"))
+            ws.cell(row=current_row, column=2, value=asset.get("asset_type"))
+            ws.cell(row=current_row, column=3, value=asset.get("brand"))
+            ws.cell(row=current_row, column=4, value=asset.get("model"))
+            ws.cell(row=current_row, column=5, value=asset.get("details"))
+            ws.cell(row=current_row, column=6, value=asset.get("qty"))
+            ws.cell(row=current_row, column=7, value=asset.get("status", ""))
+            ws.cell(row=current_row, column=8, value=asset.get("remarks", ""))
+
+            for col_idx in range(1, 9):
+                _style_data_cell(
+                    ws.cell(row=current_row, column=col_idx),
+                    center_align if col_idx in (1, 6) else left_align,
+                )
+            current_row += 1
+    else:
+        ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=8)
+        ws.cell(row=current_row, column=1, value="No asset data extracted from this document.")
+        current_row += 1
+
+    current_row += 1   # blank separator row
+
+    # ================================================================
+    # SECTION 2: RESOURCE COST
+    # ================================================================
+    ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=6)
+    section_cell = ws.cell(row=current_row, column=1, value=f"Resource Cost — Annexure {annexure_index}")
+    _style_section_cell(section_cell)
+    current_row += 1
+
+    resource_headers = ["Sr No", "Profile", "Qualification", "Qty", "Per Month (₹)", "For 12 Months (₹)"]
+    for col_idx, header in enumerate(resource_headers, start=1):
+        cell = ws.cell(row=current_row, column=col_idx, value=header)
+        _style_header_cell(cell, green_fill)
+    current_row += 1
+
+    resource_data_start = current_row
+
+    if resources:
+        for res in resources:
+            ws.cell(row=current_row, column=1, value=res.get("sr_no"))
+            ws.cell(row=current_row, column=2, value=res.get("profile"))
+            ws.cell(row=current_row, column=3, value=res.get("qualification"))
+            ws.cell(row=current_row, column=4, value=res.get("qty"))
+            ws.cell(row=current_row, column=5, value=res.get("per_month"))
+            ws.cell(row=current_row, column=6, value=f"=D{current_row}*E{current_row}*12"
+
+            )
+            for col_idx in range(1, 7):
+                _style_data_cell(
+                    ws.cell(row=current_row, column=col_idx),
+                    center_align if col_idx in (1, 4, 5, 6) else left_align,
+                )
+            current_row += 1
+
+        # Total row
+        resource_data_end = current_row - 1
+        ws.cell(row=current_row, column=5, value="Total")
+        total_cell = ws.cell(
+            row=current_row, column=6,
+            value=f"=SUM(F{resource_data_start}:F{resource_data_end})"
+        )
+        total_cell.font   = Font(name="Calibri", bold=True, size=10)
+        total_cell.border = thin_border
+        ws.cell(row=current_row, column=5).font   = Font(name="Calibri", bold=True, size=10)
+        ws.cell(row=current_row, column=5).border = thin_border
+        current_row += 1
+    else:
+        ws.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=6)
+        ws.cell(row=current_row, column=1, value="No resource cost data extracted from this document.")
+        current_row += 1
+
+    # ================================================================
+    # Column widths
+    # ================================================================
+    col_widths = [8, 20, 18, 22, 45, 10, 14, 40]
+    for col_idx, width in enumerate(col_widths, start=1):
+        ws.column_dimensions[get_column_letter(col_idx)].width = width
+
+    # Row height for header rows
+    ws.row_dimensions[2].height = 30   # asset header
+    # resource header row = row after blank separator
+    resource_header_row = resource_data_start - 1
+    if resource_header_row > 0:
+        ws.row_dimensions[resource_header_row].height = 30
+
+    logger.info(
+        f"[GEM] Created sheet '{sheet_title}' — "
+        f"{len(assets)} assets, {len(resources)} resources"
+    )
+    return sheet_title
+
+
+# ---------------------------------------------------------------------------
 # Excel writer
 # ---------------------------------------------------------------------------
 
-def write_to_excel(cell_map: Dict) -> str:
+def write_to_excel(cell_map: Dict, annexure_results: Optional[List[Dict[str, Any]]] = None) -> str:
     import shutil
     import openpyxl
 
@@ -908,16 +1234,23 @@ def write_to_excel(cell_map: Dict) -> str:
     shutil.copy(source_file, output_file)
     wb = openpyxl.load_workbook(output_file)
 
+    # ------------------------------------------------------------------
+    # Write main template sheets (Tender Checklist, Asset Details, etc.)
+    # ------------------------------------------------------------------
     for target_sheet_name, cells in cell_map.items():
         ws = _find_sheet(wb, target_sheet_name)
+        if ws is None and target_sheet_name.strip().lower() == "asset details (not merged)":
+            template_ws = _find_sheet(wb, "Asset Details")
+            if template_ws is not None:
+                ws = wb.copy_worksheet(template_ws)
+                ws.title = target_sheet_name
         if ws is None:
-            logger.warning(f"[GEM] Sheet '{target_sheet_name}' not found Ã¢â‚¬â€ skipping")
+            logger.warning(f"[GEM] Sheet '{target_sheet_name}' not found — skipping")
             continue
 
         written = 0
         success = False
 
-        # Add Status and Remarks headers for Asset Details sheet
         if target_sheet_name.strip().lower() == "asset details":
             if ws[f"F2"].value is None:
                 ws[f"F2"] = "Status"
@@ -925,12 +1258,10 @@ def write_to_excel(cell_map: Dict) -> str:
                 ws[f"G2"] = "Remarks"
             logger.info(f"[GEM] Added Status and Remarks headers to '{target_sheet_name}'")
 
-        # Unwrap {"rows": [...]} if LLM accidentally wrapped it
         if isinstance(cells, dict) and set(cells.keys()) == {"rows"} and isinstance(cells.get("rows"), list):
             logger.info(f"[GEM] Unwrapping 'rows' wrapper for '{target_sheet_name}'")
             cells = cells["rows"]
 
-        # Resource Cost requires dynamic row insertion so total/formula rows remain intact.
         if (
             isinstance(cells, list)
             and target_sheet_name.strip().lower() == "resource cost"
@@ -938,44 +1269,35 @@ def write_to_excel(cell_map: Dict) -> str:
             try:
                 written = _write_resource_cost_sheet(ws, cells)
                 success = True
-                logger.info(
-                    f"[GEM] Wrote '{target_sheet_name}' - dynamic resource table, {written} cells"
-                )
+                logger.info(f"[GEM] Wrote '{target_sheet_name}' - dynamic resource table, {written} cells")
             except Exception as e:
                 logger.error(f"[GEM] Resource Cost write failed for '{target_sheet_name}': {e}")
-                success = False
 
-        # Attempt 1: Raw list-of-dicts write for asset-style tables
         if not success and isinstance(cells, list):
             try:
                 start_row = 3
-
                 for idx, row_data in enumerate(cells, start=1):
                     row_num = start_row + idx - 1
-
+                    details_parts = []
+                    model = row_data.get("model")
+                    details = row_data.get("details")
+                    if model not in (None, ""):
+                        details_parts.append(str(model).strip())
+                    if details not in (None, ""):
+                        details_parts.append(str(details).strip())
+                    combined_details = " | ".join(part for part in details_parts if part)
                     ws[f"A{row_num}"] = idx
                     ws[f"B{row_num}"] = row_data.get("asset_type")
                     ws[f"C{row_num}"] = row_data.get("brand")
-                    ws[f"D{row_num}"] = row_data.get("details")
+                    ws[f"D{row_num}"] = combined_details or None
                     ws[f"E{row_num}"] = row_data.get("qty")
-                    
-                    # Add validation status and remarks columns
-                    status = row_data.get("status")
-                    remarks = row_data.get("remarks")
-                    ws[f"F{row_num}"] = status if status else ""
-                    ws[f"G{row_num}"] = remarks if remarks else ""
-
-                written = len(cells) * 7  # 7 columns now (A-G)
+                    ws[f"F{row_num}"] = row_data.get("status", "")
+                    ws[f"G{row_num}"] = row_data.get("remarks", "")
+                written = len(cells) * 7
                 success = True
-
-                logger.info(
-                    f"[GEM] RAW WRITE '{target_sheet_name}' — "
-                    f"{len(cells)} rows written ({written} cells)"
-                )
-
+                logger.info(f"[GEM] RAW WRITE '{target_sheet_name}' — {len(cells)} rows written ({written} cells)")
             except Exception as e:
                 logger.error(f"[GEM] Raw write failed for '{target_sheet_name}': {e}")
-                success = False
 
         if (
             not success
@@ -985,14 +1307,10 @@ def write_to_excel(cell_map: Dict) -> str:
             try:
                 written = _write_resource_cost_sheet(ws, cells)
                 success = True
-                logger.info(
-                    f"[GEM] Wrote '{target_sheet_name}' - dynamic resource table, {written} cells"
-                )
+                logger.info(f"[GEM] Wrote '{target_sheet_name}' - dynamic resource table, {written} cells")
             except Exception as e:
                 logger.error(f"[GEM] Resource Cost write failed for '{target_sheet_name}': {e}")
-                success = False
 
-        # Attempt 2: Standard dict {cell: value}
         if not success and isinstance(cells, dict):
             try:
                 for cell_addr, value in cells.items():
@@ -1001,11 +1319,10 @@ def write_to_excel(cell_map: Dict) -> str:
                     ws[cell_addr] = value
                     written += 1
                 success = True
-                logger.info(f"[GEM] Wrote '{target_sheet_name}' Ã¢â‚¬â€ dict, {written} cells")
+                logger.info(f"[GEM] Wrote '{target_sheet_name}' — dict, {written} cells")
             except Exception as e:
                 logger.error(f"[GEM] Dict write failed for '{target_sheet_name}': {e}")
 
-        # Attempt 3: Flatten list-of-dicts only for actual cell maps
         if not success and isinstance(cells, list):
             try:
                 flat = {}
@@ -1027,7 +1344,7 @@ def write_to_excel(cell_map: Dict) -> str:
                     ws[cell_addr] = value
                     written += 1
                 success = True
-                logger.info(f"[GEM] Wrote '{target_sheet_name}' Ã¢â‚¬â€ flattened, {written} cells")
+                logger.info(f"[GEM] Wrote '{target_sheet_name}' — flattened, {written} cells")
             except Exception as e:
                 logger.error(f"[GEM] All write attempts failed for '{target_sheet_name}': {e}")
 
@@ -1039,28 +1356,55 @@ def write_to_excel(cell_map: Dict) -> str:
 
         logger.info(f"[GEM] Total written to '{ws.title}': {written} cells")
 
+    # ------------------------------------------------------------------
+    # Write Annexure sheets (one per valid sub-PDF)
+    # ------------------------------------------------------------------
+    if annexure_results:
+        sheets_created = 0
+        for ann in annexure_results:
+            if ann.get("skipped"):
+                logger.info(
+                    f"[GEM] Annexure {ann['index']} skipped — "
+                    f"reason: {ann.get('reason', 'unknown')} | {ann.get('link', '')}"
+                )
+                continue
+
+            assets    = ann.get("assets",    [])
+            resources = ann.get("resources", [])
+
+            # Final guard: if both truly empty after all processing, skip sheet
+            if not assets and not resources:
+                logger.info(
+                    f"[GEM] Annexure {ann['index']} — no data to write, sheet not created"
+                )
+                continue
+
+            sheet_title = _write_annexure_sheet(wb, ann["index"], assets, resources)
+            sheets_created += 1
+            logger.info(
+                f"[GEM] Annexure sheet '{sheet_title}' created — "
+                f"{len(assets)} assets, {len(resources)} resources"
+            )
+
+        logger.info(f"[GEM] Total Annexure sheets created: {sheets_created}")
+
     wb.save(output_file)
     wb.close()
-    logger.info(f"[GEM] Excel saved Ã¢â€ â€™ {output_file}")
+    logger.info(f"[GEM] Excel saved → {output_file}")
     return output_file
-
-
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import re
-from rapidfuzz import fuzz
-
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-
-CHUNK_SIZE      = 100_000
-CHUNK_OVERLAP   = 3_000
-FUZZY_THRESHOLD = 85
 
 
 # ---------------------------------------------------------------------------
 # Smart chunker
 # ---------------------------------------------------------------------------
+
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from rapidfuzz import fuzz
+
+CHUNK_SIZE      = 100_0000000
+CHUNK_OVERLAP   = 3_000
+FUZZY_THRESHOLD = 85
+
 
 def _smart_split(text: str, size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> List[str]:
     chunks = []
@@ -1089,59 +1433,9 @@ def _smart_split(text: str, size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP
     return chunks
 
 
-# ---------------------------------------------------------------------------
-# Fuzzy dedup
-# ---------------------------------------------------------------------------
-
-def _fuzzy_dedup(assets: List[dict]) -> List[dict]:
-    groups: dict[tuple, List[int]] = {}
-    for i, item in enumerate(assets):
-        key = (
-            (item.get("asset_type") or "").strip().upper(),
-            (item.get("brand")      or "").strip().upper(),
-        )
-        groups.setdefault(key, []).append(i)
-
-    canonical: List[dict] = []
-
-    for _, indices in groups.items():
-        merged_indices: List[List[int]] = []
-
-        for idx in indices:
-            bare    = assets[idx].get("model") or ""
-            matched = False
-
-            for group in merged_indices:
-                rep_bare = assets[group[0]].get("model") or ""
-                if fuzz.token_sort_ratio(bare, rep_bare) >= FUZZY_THRESHOLD:
-                    group.append(idx)
-                    matched = True
-                    break
-
-            if not matched:
-                merged_indices.append([idx])
-
-        for group in merged_indices:
-            base = dict(assets[group[0]])
-            for idx in group[1:]:
-                other  = assets[idx]
-                eq, nq = base.get("qty"), other.get("qty")
-                base["qty"] = (
-                    None if (eq is None and nq is None)
-                    else (eq or 0) + (nq or 0)
-                )
-                if len(other.get("details") or "") > len(base.get("details") or ""):
-                    base["details"] = other["details"]
-            canonical.append(base)
-
-    for i, item in enumerate(canonical, start=1):
-        item["sr_no"] = i
-
-    return canonical
-
 
 # ---------------------------------------------------------------------------
-# Prompt
+# call2 LLM prompt
 # ---------------------------------------------------------------------------
 
 _PROMPT_TEMPLATE = """You are an expert tender document analyst specializing in IT hardware procurement tenders in India (GeM Portal, government PSUs, banks, central government undertakings).
@@ -1150,12 +1444,12 @@ Your task is to extract Asset Details and Resource Cost data from the provided t
 
 ---
 
-## OUTPUT FORMAT (return EXACTLY this structure, nothing else):
+## OUTPUT FORMAT (strict JSON, no markdown, no preamble):
 
 {{
   "Asset Details": [
     {{
-      "sr_no": <integer, 1-based sequential>,
+      "sr_no": <integer, 1-based>,
       "asset_type": <string>,
       "brand": <string or null>,
       "model": <string or null>,
@@ -1165,7 +1459,7 @@ Your task is to extract Asset Details and Resource Cost data from the provided t
   ],
   "Resource Cost": [
     {{
-      "sr_no": <integer, 1-based sequential>,
+      "sr_no": <integer, 1-based>,
       "profile": <string>,
       "qualification": <string or null>,
       "qty": <integer or null>,
@@ -1177,58 +1471,46 @@ Your task is to extract Asset Details and Resource Cost data from the provided t
 
 ---
 
-## STRICT ASSET WHITELIST — EXTRACT ONLY THESE CATEGORIES:
+## ASSET WHITELIST — extract ONLY these categories:
 
-You must ONLY extract assets that belong to the following IT and office hardware categories.
-If an item does not clearly belong to one of these categories → SKIP IT entirely.
-
-ALLOWED categories (extract these):
 - Computers / Desktops / All-in-One PCs
 - Laptops / Notebooks / Ultrabooks
 - Servers (rack, tower, blade)
-- Printers (laser, inkjet, dot matrix, thermal, multifunction/MFP)
+- Printers (laser, inkjet, dot matrix, thermal, MFP)
 - Scanners (flatbed, document, handheld)
 - Photocopiers / Reprographic machines
 - UPS (Uninterruptible Power Supply)
-- Networking equipment: Switches (managed/unmanaged), Routers, Firewalls, Access Points, Load Balancers
-- Storage devices: NAS, SAN, external HDD, tape libraries
+- Networking: Switches, Routers, Firewalls, Access Points, Load Balancers
+- Storage: NAS, SAN, external HDD, tape libraries
 - Monitors / Display screens
 - Projectors / Interactive flat panels / Smart boards
 - KVM switches
-- Racks and cabinets (server/network racks)
+- Racks and cabinets
 - Thin clients / Zero clients
-- Tablets / iPads (only if listed as IT assets in a BOQ)
+- Tablets / iPads (only if in IT BOQ)
 - Biometric devices / Fingerprint scanners / Attendance systems
-- CCTV cameras / IP cameras / DVR / NVR (only if listed in IT/security BOQ)
+- CCTV cameras / IP cameras / DVR / NVR (only if in IT BOQ)
 - Video conferencing systems / Webcams / Conference phones
 - External storage: pen drives, hard disks (only if in BOQ with qty)
 - POS terminals / Barcode scanners (only if in IT BOQ)
 - Power Distribution Units (PDU)
 - Patch panels / Structured cabling (only if in BOQ with qty)
-- Any other clearly identifiable IT or computer hardware with a brand, model, and qty
 
-STRICTLY FORBIDDEN — never extract these even if they appear in the document:
-- Military / defence / weapons equipment of any kind
-- Naval vessels, ships, boats, submarines, aircraft
-- Aircraft engines, generators, flight deck equipment, radars, navigation systems
-- Tanks, armoured vehicles, all-terrain vehicles
-- Communication jamming systems, encryption military devices, battlefield systems
-- Drones / UAVs (unless clearly a commercial IT asset with brand/model in BOQ)
-- Weapons, ammunition, helmets, jackets, uniforms, clothing
-- Medical equipment, surgical instruments
-- Industrial machinery: cranes, compressors, pumps, dehumidifiers
-- Marine equipment: RO plants, propulsion machinery, underwater systems
-- Vehicles of any kind
-- Civil / construction / engineering materials
-- Furniture, fixtures, fittings
+## STRICTLY FORBIDDEN — never extract:
+- Military / defence / weapons / naval / aircraft equipment
+- Industrial machinery, vehicles, medical equipment
+- Furniture, fixtures, civil/construction materials
 - Consumables: toner, ink, paper, cables, cleaning supplies
-- Software, licenses, subscriptions
-- AMC / CAMC service charges
+- Software, licenses, subscriptions, AMC charges
 - Manpower / staffing (those go in Resource Cost)
 
 ---
 
 ## EXHAUSTIVE EXTRACTION — COMPLETENESS RULES:
+
+- MERGED CELL RULE: If a row has qty/date/price columns filled but the asset name/description 
+  column is blank or empty, it belongs to the SAME asset as the nearest preceding row that has 
+  a name. SUM their quantities into one row. Do NOT create a blank-named row.
 
 You MUST extract EVERY qualifying IT hardware item visible in this chunk. Do not stop early.
 This is one segment of a larger document — extract everything present in this segment.
@@ -1236,15 +1518,6 @@ This is one segment of a larger document — extract everything present in this 
 NOTE: This chunk may begin mid-table. If you see rows that clearly belong to a hardware
 table even without a visible header, extract them using context clues (columns that look
 like brand, model, qty, specs).
-
----
-
-## CORE CONCEPT — ONE ROW PER UNIQUE VARIANT:
-
-A "variant" = unique combination of asset_type + brand + model + all technical specs.
-
-- Same asset_type + same brand + same model + same specs → SAME variant → SUM qty
-- Any spec differs → DIFFERENT variant → separate row
 
 ---
 
@@ -1283,9 +1556,9 @@ LEVEL 2: Detail sub-table — individual variants with brand, model, specs, per-
 ## QUANTITY RULES:
 - Use qty exactly as written
 - "as required" / "as per actual" / "to be confirmed" → qty = null
+- If no qty is given then default is 1 put 1 DONT MERGE THEM.
 - Range given → use lower bound
 - Confirmed duplicate after normalization → SUM quantities
-
 ---
 
 ## BRAND RULES:
@@ -1335,9 +1608,7 @@ Scope of Work ("bidder shall deploy N engineers"), Pre-Qualification criteria.
 3. sr_no = 1-based sequential within this chunk
 4. Do NOT fabricate — only extract what is explicitly present
 5. Do NOT skip sub-tables
-6. Do NOT merge variants with different specs
-7. DO merge confirmed duplicates (same asset_type + brand + model + specs) — sum their qty
-8. Zero assets + zero resources → {{"Asset Details": [], "Resource Cost": []}}
+6. Zero assets + zero resources → {{"Asset Details": [], "Resource Cost": []}}
 
 ---
 
@@ -1348,10 +1619,15 @@ _PROMPT = ChatPromptTemplate.from_template(_PROMPT_TEMPLATE)
 
 
 # ---------------------------------------------------------------------------
-# Main function
+# call2 LLM Processing (sub-PDFs — Asset Details + Resource Cost)
 # ---------------------------------------------------------------------------
 
 def call2_LLM_processing(sub_pdf_texts: List[str]) -> Dict:
+    """
+    Process a list of sub-PDF texts (treated as a single logical document)
+    and return extracted Asset Details and Resource Cost.
+    Each call processes ONE sub-PDF's text (callers should pass a single-item list).
+    """
     if not sub_pdf_texts:
         logger.info("[GEM] No sub PDF texts for call2")
         return {}
@@ -1360,7 +1636,7 @@ def call2_LLM_processing(sub_pdf_texts: List[str]) -> Dict:
     logger.info(f"[GEM][CALL2] Combined text: {len(combined_text)} chars")
 
     llm = ChatGoogleGenerativeAI(
-        model="gemini-3.1-pro-preview",
+        model="gemini-2.5-pro",
         google_api_key=os.getenv("GEMINI_API_KEY"),
         temperature=0,
     )
@@ -1370,13 +1646,10 @@ def call2_LLM_processing(sub_pdf_texts: List[str]) -> Dict:
     chunks = _smart_split(combined_text)
     logger.info(f"[GEM][CALL2] Split into {len(chunks)} chunk(s)")
 
-    # ------------------------------------------------------------------
-    # Process one chunk
-    # ------------------------------------------------------------------
     def process_chunk(idx: int, chunk: str):
         try:
             response = chain.invoke({"text": chunk})
-            content = response.content
+            content  = response.content
             if isinstance(content, list):
                 parts = []
                 for item in content:
@@ -1416,9 +1689,6 @@ def call2_LLM_processing(sub_pdf_texts: List[str]) -> Dict:
             logger.error(f"[GEM][CALL2] Chunk {idx} LLM call failed: {e}")
             return idx, [], []
 
-    # ------------------------------------------------------------------
-    # Parallel execution
-    # ------------------------------------------------------------------
     chunk_results: Dict[int, tuple] = {}
 
     with ThreadPoolExecutor(max_workers=min(len(chunks), 10)) as executor:
@@ -1430,9 +1700,6 @@ def call2_LLM_processing(sub_pdf_texts: List[str]) -> Dict:
             idx, assets, resources = future.result()
             chunk_results[idx] = (assets, resources)
 
-    # ------------------------------------------------------------------
-    # Merge in document order
-    # ------------------------------------------------------------------
     all_assets:    List[dict] = []
     all_resources: List[dict] = []
 
@@ -1440,40 +1707,14 @@ def call2_LLM_processing(sub_pdf_texts: List[str]) -> Dict:
         assets, resources = chunk_results[idx]
         all_assets.extend(assets)
         all_resources.extend(resources)
-
-    logger.info(
-        f"[GEM][CALL2] Total before dedup — "
-        f"assets: {len(all_assets)}, resources: {len(all_resources)}"
-    )
-
-    # ------------------------------------------------------------------
-    # Fuzzy dedup assets
-    # ------------------------------------------------------------------
-    deduped_assets = _fuzzy_dedup(all_assets)
-
-    # Simple exact dedup for resources by profile name
-    seen_profiles: dict[str, bool] = {}
-    deduped_resources: List[dict]  = []
-    for item in all_resources:
-        key = (item.get("profile") or "").strip().upper()
-        if key not in seen_profiles:
-            seen_profiles[key] = True
-            item["sr_no"] = len(deduped_resources) + 1
-            deduped_resources.append(item)
-
+    deduped_assets = all_assets
+    deduped_resources = all_resources
     logger.info(
         f"[GEM][CALL2] After dedup — "
         f"assets: {len(deduped_assets)}, resources: {len(deduped_resources)}"
     )
-
-    # ------------------------------------------------------------------
-    # Validate assets against combined text
-    # ------------------------------------------------------------------
-    logger.info(f"[GEM][CALL2] Running validation on {len(deduped_assets)} assets")
-    validated_assets = validate_assets(deduped_assets, combined_text)
-
     result = {
-        "Asset Details": validated_assets,
+        "Asset Details": deduped_assets,
         "Resource Cost": deduped_resources,
     }
 
@@ -1483,211 +1724,3 @@ def call2_LLM_processing(sub_pdf_texts: List[str]) -> Dict:
 
     logger.info(f"[GEM][CALL2] Done. Keys: {list(result.keys())}")
     return result
-
-def validate_assets(assets: List[dict], combined_text: str) -> List[dict]:
-
-    if not assets:
-        logger.info("[GEM][VALIDATE] No assets to validate")
-        return assets
-
-    if not combined_text:
-        logger.warning("[GEM][VALIDATE] No source text available — skipping validation")
-        for item in assets:
-            item["status"]  = "NOT_VALIDATED"
-            item["remarks"] = "Source text not available for validation."
-        return assets
-
-    source_chunks = _smart_split(combined_text)
-    logger.info(f"[GEM][VALIDATE] Validating {len(assets)} assets across {len(source_chunks)} chunk(s)")
-
-    flash_llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-pro",
-        google_api_key=os.getenv("GEMINI_API_KEY"),
-        temperature=0,
-    )
-    validator_chain = _VALIDATOR_PROMPT | flash_llm
-
-    def _validate_chunk(chunk_idx: int, chunk: str) -> tuple:
-        try:
-            response = validator_chain.invoke({
-                "asset_json":  json.dumps(assets, ensure_ascii=False),
-                "source_chunk": chunk,
-            })
-            raw = response.content.strip()
-            if raw.startswith("```"):
-                raw = raw.split("```")[1]
-                if raw.startswith("json"):
-                    raw = raw[4:]
-                raw = raw.strip()
-
-            return chunk_idx, json.loads(raw)
-
-        except Exception as e:
-            logger.error(f"[GEM][VALIDATE] Chunk {chunk_idx} failed: {e}")
-            return chunk_idx, []
-
-    with ThreadPoolExecutor(max_workers=5) as executor:
-        futures = {
-            executor.submit(_validate_chunk, idx, chunk): idx
-            for idx, chunk in enumerate(source_chunks, start=1)
-        }
-        chunk_results: Dict[int, list] = {}
-        for future in as_completed(futures):
-            idx, result = future.result()
-            chunk_results[idx] = result
-
-    # Merge results across chunks per asset — VERIFIED wins, else QTY_MISMATCH, else OCR_ERROR, else NOT_FOUND
-    per_asset: Dict[int, List[dict]] = {asset["sr_no"]: [] for asset in assets}
-    for idx in sorted(chunk_results):
-        for item in chunk_results[idx]:
-            sr_no = item.get("sr_no")
-            if sr_no in per_asset:
-                per_asset[sr_no].append(item)
-
-    for asset in assets:
-        results = per_asset[asset["sr_no"]]
-
-        verified_found = any(r.get("status") == "VERIFIED"      for r in results)
-        mismatch_found = any(r.get("status") == "QTY_MISMATCH"  for r in results)
-        ocr_found      = any(r.get("status") == "OCR_ERROR"     for r in results)
-
-        if verified_found:
-            asset["status"]  = "VERIFIED"
-            asset["remarks"] = None
-
-        elif mismatch_found:
-            remarks = [r.get("remarks") for r in results if r.get("status") == "QTY_MISMATCH" and r.get("remarks")]
-            asset["status"]  = "QTY_MISMATCH"
-            asset["remarks"] = " | ".join(remarks) if remarks else "Qty mismatch detected. Please double check."
-
-        elif ocr_found:
-            remarks = [r.get("remarks") for r in results if r.get("status") == "OCR_ERROR" and r.get("remarks")]
-            asset["status"]  = "OCR_ERROR"
-            asset["remarks"] = " | ".join(remarks) if remarks else "OCR/parsing issue detected. Please double check."
-
-        else:
-            asset["status"]  = "NOT_FOUND"
-            asset["remarks"] = "Asset not found in any source chunk."
-
-    logger.info(
-        f"[GEM][VALIDATE] Done — "
-        f"VERIFIED={sum(1 for a in assets if a['status']=='VERIFIED')} "
-        f"QTY_MISMATCH={sum(1 for a in assets if a['status']=='QTY_MISMATCH')} "
-        f"NOT_FOUND={sum(1 for a in assets if a['status']=='NOT_FOUND')} "
-        f"OCR_ERROR={sum(1 for a in assets if a['status']=='OCR_ERROR')}"
-    )
-    return assets
-
-_VALIDATOR_PROMPT_TEMPLATE = """You are a strict auditor validating one extracted IT hardware asset against a chunk of the original tender document source text.
-
-You will be given:
-1. ONE extracted asset row (JSON) — this is what the extraction model produced
-2. ONE chunk of the original source document text (you will receive multiple chunks)
-
-Your job: find this asset in the source chunk and verify if the extracted qty is correct.
-
----
-
-## CRITICAL CONTEXT — READ BEFORE VALIDATING:
-
-The same asset (same brand + model) may appear MULTIPLE TIMES across different tables,
-annexures, or sections in the source document — for example once in a summary BOQ table
-and again in a detailed asset list. The extraction model has already summed all occurrences
-into ONE row with a combined qty.
-
-So when you search the source chunk:
-- Find ALL occurrences of this asset in this chunk
-- Sum their individual qtys
-- Compare that sum to the extracted qty
-
-If the chunk only contains some occurrences (others are in different chunks), you will
-return NOT_FOUND_IN_CHUNK so the caller knows to check other chunks too.
-
----
-
-## OUTPUT FORMAT (return EXACTLY this, nothing else):
-
-{{
-  "status": <string>,
-  "remarks": <string or null>
-}}
-
----
-
-## STATUS VALUES — pick exactly one:
-
-- "VERIFIED"           → found in this chunk, qty matches (or sums to) extracted qty
-- "QTY_MISMATCH"       → found in this chunk, but qty does NOT match — explain discrepancy
-- "NOT_FOUND_IN_CHUNK" → this asset is not mentioned in this chunk at all — caller will check other chunks
-- "OCR_ERROR"          → asset found but surrounding text is garbled / columns are shifted / numbers are corrupted
-
----
-
-## REMARKS RULES:
-
-- "VERIFIED" → remarks = null
-
-- "QTY_MISMATCH" → Write in a clear, client-friendly way. Structure it as:
-    "We found [asset] in the source document but the quantity doesn't add up.
-    Here's what we saw: [describe each occurrence in plain English — e.g. 'Row 12 in the BOQ table lists qty 5', 'Row 34 in the Annexure A lists qty 3'].
-    That gives us a source total of X, but the extracted figure is Y.
-    This discrepancy may be because [plain English reason — e.g. 'two different variants appear to have been grouped under one line item', 'the summary table and the detail table show different numbers'].
-    👉 We recommend opening the original document and checking [specific table/section/row] to confirm the correct quantity before proceeding."
-
-- "NOT_FOUND_IN_CHUNK" → remarks = null
-
-- "OCR_ERROR" → Write in a clear, client-friendly way. Structure it as:
-    "We found a reference to [asset] in the source document, but the surrounding data appears to be corrupted or misaligned — likely due to a PDF scanning or OCR issue.
-    Specifically, near [describe location in plain English — e.g. 'Row 8 of the hardware table on what appears to be page 3'], the text reads '[short garbled snippet]' which suggests the columns may have shifted or a digit was misread.
-    👉 We recommend opening the original document and visually inspecting this section to retrieve the correct quantity."
-
-- "NOT_FOUND" → Write in a clear, client-friendly way. Structure it as:
-    "We were unable to locate [asset_type] ([brand] if available) anywhere in the source document.
-    This could mean it was missed during extraction, the item description in the document uses different terminology, or the OCR did not capture it correctly.
-    👉 We recommend searching the original document manually for this item to confirm whether it is present and what quantity is listed."
-
-## AMBIGUITY RULES — handle these generically:
-
-- If multiple assets share a single line item with one qty → status = "QTY_MISMATCH", explain in plain English that the document groups multiple items under one entry making it impossible to confirm individual quantities, recommend the client verify each item separately.
-- If a qty appears as a range (e.g. "1-2") → status = "QTY_MISMATCH", mention the range found and that the lower bound was used.
-- If qty column exists but is blank → status = "QTY_MISMATCH", mention the column was found but empty.
-- If same item appears in both a summary table and a detail table with different qtys → status = "QTY_MISMATCH", clearly distinguish which table showed which number and recommend trusting the detail table.
-- If item is found but has no qty anywhere nearby → status = "QTY_MISMATCH", mention item was located but no quantity could be confirmed from the surrounding text.
-- NEVER speculate about intent — only describe what is literally present in the document.
----
-
-## HOW TO SEARCH (follow in order):
-
-1. Search for the brand name (case-insensitive) anywhere in the chunk
-2. Near each brand match, look for the model number — first strip label noise:
-   remove "Model", "Model No.", "Model No", "Model Number", "Part No.", "SKU", "Code" prefixes
-   then compare the bare model string (case-insensitive, ignore extra spaces)
-3. Also search by asset_type if brand+model search yields nothing
-4. For every match found, read the qty from that row — look for columns named
-   "Qty", "Quantity", "Nos", "No.", "Count", or a standalone number in the same row
-5. If multiple matches found in this chunk → sum all their qtys
-6. Compare sum to extracted qty
-
----
-
-## ABSOLUTE RULES:
-1. Return ONLY the JSON object — no preamble, no markdown, no code fences
-2. NEVER fabricate quantities — only use numbers explicitly written in the source chunk
-3. NEVER mark as VERIFIED if you are not 100% certain the qty matches
-4. If unsure between VERIFIED and QTY_MISMATCH → always choose QTY_MISMATCH with your reasoning in remarks
-5. If asset brand/model is simply not in this chunk → NOT_FOUND_IN_CHUNK (not an error, just means check other chunks)
-6. Return ONLY the JSON array — no preamble, no markdown, no code fences
-7. You MUST return an entry for EVERY asset in the input JSON — no skipping
-8. sr_no MUST match exactly the sr_no from the input JSON — never renumber, never change
-9. If asset is not found in all the chunks → return {{"sr_no": <original_sr_no>, "status": "NOT_FOUND_IN_CHUNK", "remarks": null}}
-10. Total items in output array MUST equal total items in input array
-
----
-
-EXTRACTED ASSET:
-{asset_json}
-
-SOURCE CHUNK:
-{source_chunk}"""
-
-_VALIDATOR_PROMPT = ChatPromptTemplate.from_template(_VALIDATOR_PROMPT_TEMPLATE)

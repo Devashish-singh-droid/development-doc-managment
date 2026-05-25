@@ -2144,6 +2144,20 @@ _QA_SOFT_NOT_FOUND_ANSWER = "I wasn't able to find matching information in my kn
 _QA_INCOMPLETE_INPUT_ANSWER = "It looks like you were still typing. Please complete the sentence so I can help properly."
 
 
+def _qa_can_generate_presentation(question: str, answer: str) -> bool:
+    safe_question = str(question or "").strip()
+    safe_answer = " ".join(str(answer or "").split()).strip()
+    if not safe_question or not safe_answer:
+        return False
+    normalized_answer = safe_answer.lower()
+    return (
+        normalized_answer != _QA_SOFT_NOT_FOUND_ANSWER.lower()
+        and normalized_answer != _QA_INCOMPLETE_INPUT_ANSWER.lower()
+        and "wasn't able to find matching information in my knowledge sources" not in normalized_answer
+        and "was not able to find matching information in my knowledge sources" not in normalized_answer
+    )
+
+
 def _qa_incomplete_input_payload(conversation_id: str) -> dict:
     return {
         "answer": _QA_INCOMPLETE_INPUT_ANSWER,
@@ -5578,6 +5592,8 @@ def generate_qa_presentation(
         raise HTTPException(status_code=400, detail="Question is required to generate a presentation.")
     if not answer:
         raise HTTPException(status_code=400, detail="Answer is required to generate a presentation.")
+    if not _qa_can_generate_presentation(question, answer):
+        raise HTTPException(status_code=400, detail="A presentation can only be generated when AI Buzz has an answer.")
 
     output_path = None
     retention_hours = resolve_retention_hours(temporaryRetentionHours)
@@ -5611,13 +5627,11 @@ def health_check():
 
 @router.get("/system-settings", response_model=SystemSettingsResponse)
 def get_system_settings(request: Request):
-    user_role = _get_request_role(request)
-    if user_role not in {UserRole.ADMIN, UserRole.SUPER_ADMIN}:
-        raise HTTPException(status_code=403, detail="Only Admin or Super Admin can view system settings.")
     return {
         "generate_video_transcripts": settings.generate_video_transcripts,
         "save_original_documents": settings.save_original_documents,
         "guided_tour_enabled": True,
+        "face_auth_enabled": settings.face_auth_enabled,
         "allowed_user_email_domain": settings.allowed_user_email_domain,
     }
 
@@ -5630,13 +5644,16 @@ def update_system_settings(request: Request, payload: UpdateSystemSettingsReques
     allowed_domain = str(payload.allowed_user_email_domain or "").strip().lower().lstrip("@")
     if not allowed_domain:
         raise HTTPException(status_code=400, detail="Allowed email domain is required.")
-    settings.set_persistent_value("GENERATE_VIDEO_TRANSCRIPTS", payload.generate_video_transcripts)
+    if user_role == UserRole.SUPER_ADMIN:
+        settings.set_persistent_value("GENERATE_VIDEO_TRANSCRIPTS", payload.generate_video_transcripts)
     settings.set_persistent_value("SAVE_ORIGINAL_DOCUMENTS", payload.save_original_documents)
+    settings.set_persistent_value("FACE_AUTH_ENABLED", payload.face_auth_enabled)
     settings.set_persistent_value("ALLOWED_USER_EMAIL_DOMAIN", allowed_domain)
     return {
         "generate_video_transcripts": settings.generate_video_transcripts,
         "save_original_documents": settings.save_original_documents,
         "guided_tour_enabled": True,
+        "face_auth_enabled": settings.face_auth_enabled,
         "allowed_user_email_domain": settings.allowed_user_email_domain,
     }
 
