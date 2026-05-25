@@ -833,7 +833,35 @@ class MongoDBManager:
             return True
         if (token + "s") in blob_tokens:
             return True
+        if len(token) >= 5:
+            for blob_token in blob_tokens:
+                if not blob_token or abs(len(blob_token) - len(token)) > 2:
+                    continue
+                if blob_token.startswith(token) or token.startswith(blob_token):
+                    return True
         return False
+
+    def _normalize_object_id_strings(self, values: list[str] | None) -> list[str]:
+        normalized = []
+        seen = set()
+        for raw_value in values or []:
+            value = str(raw_value or "").strip()
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            normalized.append(value)
+        return normalized
+
+    def _coerce_object_ids(self, values: list[str] | None):
+        from bson import ObjectId
+
+        object_ids = []
+        for value in self._normalize_object_id_strings(values):
+            try:
+                object_ids.append(ObjectId(value))
+            except Exception:
+                continue
+        return object_ids
 
     def _metadata_values_to_text(self, value) -> str:
         """Flatten nested metadata to values-only text (no field names)."""
@@ -3833,7 +3861,13 @@ class MongoDBManager:
         )
         return sources
 
-    def qa_retrieve_documents(self, query: str, limit: int = 6, access_context: Optional[dict] = None):
+    def qa_retrieve_documents(
+        self,
+        query: str,
+        limit: int = 6,
+        access_context: Optional[dict] = None,
+        preferred_doc_ids: Optional[list[str]] = None,
+    ):
         """Hybrid: Manifest fast-path â†’ Semantic fallback"""
         if not self.client:
             return []
@@ -3848,6 +3882,47 @@ class MongoDBManager:
         if not query_tokens:
             return []
         constraints = self._parse_semantic_constraints(query_norm)
+        preferred_ids = self._normalize_object_id_strings(preferred_doc_ids)
+
+        def _merge_sources(*source_groups):
+            merged = []
+            seen_doc_ids = set()
+            for group in source_groups:
+                for source in group or []:
+                    doc_id = str((source or {}).get("doc_id") or "").strip()
+                    if not doc_id or doc_id in seen_doc_ids:
+                        continue
+                    seen_doc_ids.add(doc_id)
+                    merged.append(source)
+                    if len(merged) >= retrieval_limit:
+                        return merged[:retrieval_limit]
+            return merged[:retrieval_limit]
+
+        focused_sources = []
+        if preferred_ids:
+            focused_query = f"purchase order po invoice {query_norm}".strip() if broad_po_listing else query_norm
+            focused_docs = self.semantic_search(
+                query=focused_query,
+                document_type=constraints.get("document_type"),
+                limit=retrieval_limit,
+                access_context=access_context,
+                allowed_doc_ids=preferred_ids,
+            )
+            for doc in focused_docs[:retrieval_limit]:
+                focused_sources.append(
+                    self._build_qa_source_payload(
+                        doc=doc,
+                        query=query_norm,
+                        score=float(doc.get("semantic_score", 0.55)),
+                        reasons=[doc.get("semantic_reason", "recent upload focus")],
+                    )
+                )
+            if focused_sources:
+                logger.info(f"[QA] Upload focus: {len(focused_sources)} preferred document source(s)")
+                if len(focused_sources) >= safe_limit:
+                    elapsed = time.perf_counter() - qa_started_at
+                    logger.info(f"[QA] Upload focus satisfied request in {elapsed:.2f}s")
+                    return focused_sources[:retrieval_limit]
 
         if broad_po_listing:
             broad_po_sources = self._qa_retrieve_all_purchase_order_documents(
@@ -3858,7 +3933,7 @@ class MongoDBManager:
             if broad_po_sources:
                 elapsed = time.perf_counter() - qa_started_at
                 logger.info(f"[QA] Broad PO scan: {len(broad_po_sources)} sources in {elapsed:.2f}s")
-                return broad_po_sources
+                return _merge_sources(focused_sources, broad_po_sources)
         
         # PHASE 1: Manifest
         manifest_sources = self._qa_retrieve_from_employee_manifest(
@@ -3900,7 +3975,7 @@ class MongoDBManager:
                 manifest_sources = merged_sources[:retrieval_limit]
             elapsed = time.perf_counter() - qa_started_at
             logger.info(f"[QA] Manifest: {len(manifest_sources)} sources in {elapsed:.2f}s")
-            return manifest_sources
+            return _merge_sources(focused_sources, manifest_sources)
         
         # PHASE 2: Fallback to semantic search
         logger.info("[QA] Manifest: 0 results. Fallback to semantic search...")
@@ -3932,9 +4007,12 @@ class MongoDBManager:
                     score=doc.get("semantic_score", 0.5),
                     reasons=[doc.get("semantic_reason", "Fallback semantic")]
                 ))
-            return qa_sources
-        
+            return _merge_sources(focused_sources, qa_sources)
+
         elapsed = time.perf_counter() - qa_started_at
+        if focused_sources:
+            logger.info(f"[QA] Returning upload focus only after {elapsed:.2f}s")
+            return focused_sources[:retrieval_limit]
         logger.info(f"[QA] No results after {elapsed:.2f}s")
         return []
 
@@ -3944,6 +4022,7 @@ class MongoDBManager:
         document_type: str = None,
         limit: int = 20,
         access_context: Optional[dict] = None,
+        allowed_doc_ids: Optional[list[str]] = None,
     ):
         """Search documents using natural-language intent + relevance scoring."""
         if not self.client:
@@ -3961,6 +4040,11 @@ class MongoDBManager:
         kbac_query = self._kbac_query(access_context)
         if effective_type:
             base_query["document_type"] = {"$regex": re.escape(effective_type), "$options": "i"}
+        allowed_object_ids = self._coerce_object_ids(allowed_doc_ids)
+        if allowed_doc_ids is not None and not allowed_object_ids:
+            return []
+        if allowed_object_ids:
+            base_query["_id"] = {"$in": allowed_object_ids}
 
         projection = {
             "document_type": 1,

@@ -46,9 +46,21 @@ class DatabaseService:
         return f"team:{team_owner}" if team_owner else "global"
 
     @classmethod
-    def _qa_retrieval_cache_key(cls, query: str, limit: int, access_context: Optional[Dict[str, Any]] = None) -> str:
+    def _qa_retrieval_cache_key(
+        cls,
+        query: str,
+        limit: int,
+        access_context: Optional[Dict[str, Any]] = None,
+        preferred_doc_ids: Optional[List[str]] = None,
+    ) -> str:
         normalized = " ".join(str(query or "").strip().lower().split())
-        payload = f"{normalized}|{int(limit or 0)}|scope:{cls._access_scope_key(access_context)}"
+        preferred_scope = ",".join(
+            sorted(str(doc_id or "").strip() for doc_id in (preferred_doc_ids or []) if str(doc_id or "").strip())
+        ) or "none"
+        payload = (
+            f"{normalized}|{int(limit or 0)}|scope:{cls._access_scope_key(access_context)}|"
+            f"preferred:{preferred_scope}"
+        )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     def _qa_retrieval_cache_get(self, key: str):
@@ -312,18 +324,24 @@ class DatabaseService:
         query: str,
         limit: int = 6,
         access_context: Optional[Dict[str, Any]] = None,
+        preferred_doc_ids: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Retrieve Q&A source documents using the shared MongoDB manager."""
         self._ensure_db_connection()
         bypass_cache = self._is_broad_purchase_order_listing_query(query)
-        cache_key = self._qa_retrieval_cache_key(query, limit, access_context)
+        cache_key = self._qa_retrieval_cache_key(query, limit, access_context, preferred_doc_ids)
         if not bypass_cache:
             cached = self._qa_retrieval_cache_get(cache_key)
             if cached is not None:
                 logger.info("[QA] Retrieval cache hit")
                 return cached
 
-        sources = self.db.qa_retrieve_documents(query=query, limit=limit, access_context=access_context)
+        sources = self.db.qa_retrieve_documents(
+            query=query,
+            limit=limit,
+            access_context=access_context,
+            preferred_doc_ids=preferred_doc_ids,
+        )
         if not bypass_cache:
             self._qa_retrieval_cache_set(cache_key, sources)
         return sources

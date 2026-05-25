@@ -435,6 +435,7 @@ class QARequest(ApiModel):
     limit: int = 6
     use_chunks: bool = True
     chunk_limit: Optional[int] = None
+    focus_document_ids: List[str] = Field(default_factory=list)
     conversation_id: Optional[str] = None
     replace_turn_id: Optional[str] = None
 

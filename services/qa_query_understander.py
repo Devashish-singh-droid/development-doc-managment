@@ -25,7 +25,7 @@ Return ONLY valid JSON with this schema:
   "topic": "short normalized topic",
   "intent": "short verb phrase for what user wants",
   "subject": "main person/company/object being asked about or empty string",
-  "attribute": "specific requested field or concept such as father name, qualification, email, medicine, summary, expiry date, amount, or empty string",
+  "attribute": "specific requested field or concept such as father name, qualification, email, PO number, customer PO number, medicine, summary, expiry date, amount, or empty string",
   "document_type": "best inferred document type or empty string",
   "entity_type": "person/company/patient/document/medicine/general or empty string",
   "vendor": "vendor/company filter if clearly requested else empty string",
@@ -42,7 +42,7 @@ Return ONLY valid JSON with this schema:
 Rules:
 1. Extract meaning from the full question, not just keywords.
 2. Be strict about the main subject and attribute.
-3. For direct attribute lookups like email, phone, father name, qualification, PAN, GST, amount, date, expiry date, document number, medicine, medicine list, or prescription list, set simple_lookup to true.
+3. For direct attribute lookups like email, phone, father name, qualification, PAN, GST, amount, date, expiry date, document number, PO number, customer PO number, medicine, medicine list, or prescription list, set simple_lookup to true.
 4. For summaries, explanations, procedures, meanings, and how-to questions, set simple_lookup to false.
 5. search_terms should help retrieval, mixing exact phrases and key entities.
 6. must_match_terms should include only truly essential terms, especially the subject/entity.
@@ -244,6 +244,9 @@ def _heuristic_analysis(question: str) -> Dict[str, Any]:
         out["subject"] = _clean_text(subject_match.group(1))
 
     attribute_patterns = [
+        ("customer po number", r"\bcustomer\s+(?:po|p\.?\s*o\.?|purchase\s+order)\s*(?:number|no|#)?\b"),
+        ("po number", r"\b(?:po|p\.?\s*o\.?|purchase\s+order)\s+(?:number|no|#)\b"),
+        ("invoice number", r"\binvoice\s+(?:number|no|#)\b"),
         ("father name", r"\bfather(?:'s)?\s+name\b"),
         ("qualification", r"\bqualification\b"),
         ("email", r"\b(?:email|mail id|email id|e-mail)\b"),
@@ -282,6 +285,9 @@ def _heuristic_analysis(question: str) -> Dict[str, Any]:
     elif re.search(r"\bbid\b|\btender\b|\brfq\b", q):
         out["document_type"] = "bid"
 
+    if out["subject"] and re.search(r"\b(?:po|purchase order|invoice|vendor|customer)\b", q):
+        out["entity_type"] = out["entity_type"] or "company"
+
     year_match = re.search(r"\b(?:19|20)\d{2}\b", q)
     if year_match:
         out["year"] = year_match.group(0)
@@ -307,6 +313,12 @@ def _heuristic_analysis(question: str) -> Dict[str, Any]:
         search_terms.extend(_scenario_terms(question))
     else:
         search_terms.extend(_tokenize_terms(question))
+    if out["attribute"] == "customer po number":
+        search_terms.extend(["customer po number", "customer po", "po number", "purchase order number"])
+    elif out["attribute"] == "po number":
+        search_terms.extend(["po number", "purchase order number"])
+    elif out["attribute"] == "invoice number":
+        search_terms.extend(["invoice number", "document number"])
 
     must_match_terms = []
     if out["subject"]:
@@ -330,7 +342,7 @@ def _should_use_heuristic_analysis(question: str, analysis: Dict[str, Any]) -> b
     has_subject = bool(str(analysis.get("subject") or "").strip())
     has_attribute = bool(str(analysis.get("attribute") or "").strip())
     procurement_markers = [
-        "po", "purchase order", "invoice", "inv", "amount", "details", "detail",
+        "po", "purchase order", "po number", "customer po", "customer po number", "invoice", "inv", "amount", "details", "detail",
         "summary", "compare", "comparison", "tell me about", "about", "list",
     ]
     if has_doc_number:

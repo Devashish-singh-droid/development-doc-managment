@@ -3005,6 +3005,20 @@ def _qa_build_contextual_question(question: str, history: list[dict]) -> str:
     return retrieval_question
 
 
+def _normalize_focus_document_ids(values: Any, limit: int = 8) -> list[str]:
+    normalized = []
+    seen = set()
+    for raw_value in values if isinstance(values, list) else []:
+        value = str(raw_value or "").strip()
+        if not value or value in seen:
+            continue
+        seen.add(value)
+        normalized.append(value)
+        if len(normalized) >= max(1, int(limit or 8)):
+            break
+    return normalized
+
+
 def _qa_merge_sources(primary_sources: list[dict], secondary_sources: list[dict]) -> list[dict]:
     merged = []
     seen = set()
@@ -4926,8 +4940,10 @@ async def question_answer(request: Request, payload: QARequest):  # NEW: Add req
     conversation_context = _qa_build_conversation_context(qa_history)
     retrieval_question = _qa_build_contextual_question(question, qa_history)
     contextual_sources = _qa_collect_context_sources(question, qa_history)
+    focus_doc_ids = _normalize_focus_document_ids(payload.focus_document_ids, limit=max(limit, chunk_limit, 6))
     context_signature = _qa_build_context_signature(qa_history)
-    cache_scope_key = f"{access_context.get('scope_key', 'all')}|ctx:{context_signature}"
+    focus_signature = ",".join(focus_doc_ids) or "none"
+    cache_scope_key = f"{access_context.get('scope_key', 'all')}|ctx:{context_signature}|focus:{focus_signature}"
     cache_key = _qa_cache_key(question, limit, chunk_limit, use_chunks, cache_scope_key)
 
     cached_response = _qa_cache_get(cache_key)
@@ -4977,6 +4993,7 @@ async def question_answer(request: Request, payload: QARequest):  # NEW: Add req
         retrieval_question,
         limit=limit,
         access_context=access_context,
+        preferred_doc_ids=focus_doc_ids,
     )
     if contextual_sources:
         doc_sources = _qa_merge_sources(doc_sources, contextual_sources)
@@ -4984,11 +5001,12 @@ async def question_answer(request: Request, payload: QARequest):  # NEW: Add req
 
     chunk_sources = []
     if use_chunks:
-        allowed_chunk_doc_ids = [
+        allowed_chunk_doc_ids = focus_doc_ids + [
             str(src.get("doc_id") or "").strip()
             for src in doc_sources
             if isinstance(src, dict) and str(src.get("doc_id") or "").strip()
         ]
+        allowed_chunk_doc_ids = _normalize_focus_document_ids(allowed_chunk_doc_ids, limit=max(chunk_limit * 2, 8))
         chunk_sources = db_service.qa_retrieve_chunks(
             retrieval_question,
             limit=chunk_limit,
@@ -5244,8 +5262,10 @@ async def question_answer_streaming(request: Request, payload: QARequest):
     conversation_context = _qa_build_conversation_context(qa_history)
     retrieval_question = _qa_build_contextual_question(question, qa_history)
     contextual_sources = _qa_collect_context_sources(question, qa_history)
+    focus_doc_ids = _normalize_focus_document_ids(payload.focus_document_ids, limit=max(limit, chunk_limit, 6))
     context_signature = _qa_build_context_signature(qa_history)
-    cache_scope_key = f"{access_context.get('scope_key', 'all')}|ctx:{context_signature}"
+    focus_signature = ",".join(focus_doc_ids) or "none"
+    cache_scope_key = f"{access_context.get('scope_key', 'all')}|ctx:{context_signature}|focus:{focus_signature}"
     cache_key = _qa_cache_key(question, limit, chunk_limit, use_chunks, cache_scope_key)
 
     def stream():
@@ -5316,6 +5336,7 @@ async def question_answer_streaming(request: Request, payload: QARequest):
                 retrieval_question,
                 limit=limit,
                 access_context=access_context,
+                preferred_doc_ids=focus_doc_ids,
             )
             if contextual_sources:
                 doc_sources = _qa_merge_sources(doc_sources, contextual_sources)
@@ -5323,11 +5344,12 @@ async def question_answer_streaming(request: Request, payload: QARequest):
 
             chunk_sources = []
             if use_chunks:
-                allowed_chunk_doc_ids = [
+                allowed_chunk_doc_ids = focus_doc_ids + [
                     str(src.get("doc_id") or "").strip()
                     for src in doc_sources
                     if isinstance(src, dict) and str(src.get("doc_id") or "").strip()
                 ]
+                allowed_chunk_doc_ids = _normalize_focus_document_ids(allowed_chunk_doc_ids, limit=max(chunk_limit * 2, 8))
                 chunk_sources = db_service.qa_retrieve_chunks(
                     retrieval_question,
                     limit=chunk_limit,

@@ -12407,10 +12407,62 @@
 	            sourcesOpen: true,
 	            historyOpen: true
 	        };
+        const QA_UPLOAD_CONTEXT_STORAGE_KEY = 'qaUploadContext';
+        const QA_UPLOAD_CONTEXT_MAX_DOCS = 6;
+        const QA_UPLOAD_CONTEXT_MAX_AGE_MS = 30 * 60 * 1000;
 
 	        function getCurrentQaUserRole() {
 	            return localStorage.getItem('userRole') || 'employee';
 	        }
+
+        function readQaUploadContext() {
+            try {
+                const parsed = JSON.parse(localStorage.getItem(QA_UPLOAD_CONTEXT_STORAGE_KEY) || '[]');
+                return Array.isArray(parsed) ? parsed : [];
+            } catch (error) {
+                return [];
+            }
+        }
+
+        function writeQaUploadContext(entries) {
+            const safeEntries = Array.isArray(entries) ? entries.slice(0, QA_UPLOAD_CONTEXT_MAX_DOCS) : [];
+            localStorage.setItem(QA_UPLOAD_CONTEXT_STORAGE_KEY, JSON.stringify(safeEntries));
+        }
+
+        function rememberQaUploadedDocument(statusPayload, fallback = {}) {
+            const safeStatus = statusPayload && typeof statusPayload === 'object' ? statusPayload : {};
+            const documentId = String(safeStatus.document_id || fallback.documentId || '').trim();
+            if (!documentId) return;
+
+            const entry = {
+                document_id: documentId,
+                document_uuid: String(safeStatus.document_uuid || fallback.documentUuid || '').trim(),
+                file_name: String(fallback.originalFilename || safeStatus.file_name || fallback.filename || '').trim(),
+                tracking_filename: String(fallback.filename || safeStatus.filename || '').trim(),
+                saved_at_ms: Date.now()
+            };
+
+            const existing = readQaUploadContext()
+                .filter(item => item && String(item.document_id || '').trim() && String(item.document_id || '').trim() !== documentId);
+            existing.unshift(entry);
+            writeQaUploadContext(existing);
+        }
+
+        function getRecentQaFocusDocumentIds() {
+            const cutoff = Date.now() - QA_UPLOAD_CONTEXT_MAX_AGE_MS;
+            const activeEntries = readQaUploadContext().filter(item => {
+                const documentId = String(item && item.document_id || '').trim();
+                const savedAtMs = Number(item && item.saved_at_ms || 0);
+                return !!documentId && savedAtMs >= cutoff;
+            });
+            if (activeEntries.length !== readQaUploadContext().length) {
+                writeQaUploadContext(activeEntries);
+            }
+            return activeEntries
+                .map(item => String(item.document_id || '').trim())
+                .filter(Boolean)
+                .slice(0, QA_UPLOAD_CONTEXT_MAX_DOCS);
+        }
 
 	        function generateQaConversationId() {
 	            if (window.crypto && typeof window.crypto.randomUUID === 'function') {
@@ -13994,6 +14046,7 @@
 			                        body: JSON.stringify({
                                     question,
                                     limit: 8,
+                                    focus_document_ids: getRecentQaFocusDocumentIds(),
                                     conversation_id: conversationIdForRequest,
                                     replace_turn_id: replaceTurnId || null
                                 }),
@@ -15639,6 +15692,8 @@
                 filename: filename,
                 trackingFilename: trackingFilename || filename,
                 originalFilename: originalFilename || filename,
+                documentId: '',
+                documentUuid: '',
                 status: status,
                 progress: progress,
                 startTime: new Date().toLocaleString(),
@@ -15658,6 +15713,8 @@
                 if (fields.filename) entry.filename = fields.filename;
                 if (fields.trackingFilename) entry.trackingFilename = fields.trackingFilename;
                 if (fields.originalFilename) entry.originalFilename = fields.originalFilename;
+                if (fields.documentId !== undefined) entry.documentId = fields.documentId || '';
+                if (fields.documentUuid !== undefined) entry.documentUuid = fields.documentUuid || '';
                 localStorage.setItem('processingHistory', JSON.stringify(history));
             }
         }
@@ -16084,14 +16141,26 @@
 
                             const statusDisplay = formatProcessingStatusLabel(status.status);
                             updateProcessingHistoryEntry(entryId, statusDisplay, status.progress);
+                            updateProcessingHistoryEntryMeta(entryId, {
+                                documentId: String(status.document_id || ''),
+                                documentUuid: String(status.document_uuid || '')
+                            });
                             updateProcessingHistoryUI();
 
                             if (status.status === 'completed') {
+                                rememberQaUploadedDocument(status, {
+                                    filename,
+                                    originalFilename
+                                });
                                 console.log(` ${filename} completed!`);
                                 resolve(status);
                                 return;
                             }
                             if (status.status === 'duplicate_skipped') {
+                                rememberQaUploadedDocument(status, {
+                                    filename,
+                                    originalFilename
+                                });
                                 console.warn(` ${filename} skipped as duplicate: ${status.message}`);
                                 resolve(status);
                                 return;
@@ -16148,7 +16217,7 @@
                 const response = await fetch(`${API_URL}/documents?limit=100`);
                 const data = await response.json();
 
-                const found = Array.isArray(data.documents) && data.documents.some(doc => {
+                const foundDoc = Array.isArray(data.documents) ? data.documents.find(doc => {
                     const savedAt = new Date(doc.saved_at);
                     const now = new Date();
                     const timeDiff = (now - savedAt) / 1000;
@@ -16159,13 +16228,28 @@
                     }
 
                     return docFileName === expectedOriginalFilename || docFileName === expectedTrackingFilename;
-                });
+                }) : null;
 
-                if (found) {
+                if (foundDoc) {
                     console.log(` Document found in database for ${originalFilename || filename}. File was successfully processed.`);
                     updateProcessingHistoryEntry(entryId, 'Completed', 100);
+                    updateProcessingHistoryEntryMeta(entryId, {
+                        documentId: String(foundDoc._id || ''),
+                        documentUuid: String(foundDoc.document_uuid || '')
+                    });
+                    rememberQaUploadedDocument({
+                        document_id: String(foundDoc._id || ''),
+                        document_uuid: String(foundDoc.document_uuid || '')
+                    }, {
+                        filename,
+                        originalFilename
+                    });
                     updateProcessingHistoryUI();
-                    return Promise.resolve(null);
+                    return Promise.resolve({
+                        status: 'completed',
+                        document_id: String(foundDoc._id || ''),
+                        document_uuid: String(foundDoc.document_uuid || '')
+                    });
                 } else {
                     return Promise.reject(new Error(`Document ${originalFilename || filename} not found in the recent document list yet`));
                 }
