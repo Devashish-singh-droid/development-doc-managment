@@ -1587,7 +1587,8 @@
     </div>
 
     <script>
-      const BASE_PATH = {{ base_path | tojson }};
+	      const BASE_PATH = {{ base_path | tojson }};
+	      const FACE_AUTH_AUTO_LOGIN_ENABLED = {{ face_auth_enabled | tojson }};
 
       function withBasePath(path = "") {
         const rawPath = String(path || "");
@@ -1637,7 +1638,13 @@
 	      const faceCanvas = document.getElementById("faceCanvas");
 	      const captureFaceButton = document.getElementById("captureFaceButton");
 	      const retryFaceButton = document.getElementById("retryFaceButton");
-	      let faceStream = null;
+		      let faceStream = null;
+		      let faceAuthSubmitting = false;
+		      let faceAutoLoginActive = false;
+		      let faceAutoLoginTimer = null;
+		      let faceAutoNoFaceAttempts = 0;
+		      const FACE_AUTO_MAX_NO_FACE_ATTEMPTS = 8;
+		      const FACE_AUTO_RETRY_MS = 1400;
 	      const forgotPasswordState = {
 	        email: "",
 	        resetToken: "",
@@ -1737,12 +1744,14 @@
 	          method: "POST",
 	          headers: {
 	            "Content-Type": "application/json",
-          },
-          body: JSON.stringify(payload),
-        });
-        const data = await response.json().catch(() => ({}));
-        if (!response.ok) {
-          throw new Error(data.detail || "Something went wrong. Please try again.");
+	          },
+	          body: JSON.stringify(payload),
+	        });
+	        const data = await response.json().catch(() => ({}));
+	        if (!response.ok) {
+	          const error = new Error(data.detail || "Something went wrong. Please try again.");
+	          error.status = response.status;
+	          throw error;
 	        }
 	        return data;
 	      }
@@ -1760,7 +1769,40 @@
 	        faceAuthStatus.className = "modal-status " + type;
 	      }
 
+		      function clearFaceAutoLoginTimer() {
+		        if (faceAutoLoginTimer) {
+		          window.clearTimeout(faceAutoLoginTimer);
+		          faceAutoLoginTimer = null;
+		        }
+		      }
+
+		      function setFaceManualControlsVisible(visible) {
+		        if (captureFaceButton) {
+		          captureFaceButton.hidden = !visible;
+		        }
+		        if (retryFaceButton) {
+		          retryFaceButton.hidden = !visible;
+		        }
+		      }
+
+		      function stopFaceAutoLogin() {
+		        faceAutoLoginActive = false;
+		        faceAutoNoFaceAttempts = 0;
+		        clearFaceAutoLoginTimer();
+		      }
+
+		      function isRecoverableAutoFaceError(error) {
+		        if (!error || error.status !== 400) return false;
+		        const message = String(error.message || "").toLowerCase();
+		        return (
+		          message.includes("no face") ||
+		          message.includes("multiple faces") ||
+		          message.includes("camera is not ready")
+		        );
+		      }
+
 	      function stopFaceCamera() {
+		        clearFaceAutoLoginTimer();
 	        if (faceStream) {
 	          faceStream.getTracks().forEach((track) => track.stop());
 	          faceStream = null;
@@ -1783,26 +1825,44 @@
 	        await faceVideo.play();
 	      }
 
-	      async function openFaceAuthModal(mode) {
-		        if (faceAuthTitle) {
-		          faceAuthTitle.textContent = "Login with face";
-		        }
-		        if (faceAuthHelp) {
-		          faceAuthHelp.textContent = "Look at the camera clearly. We will match you with an enrolled account.";
+		      async function openFaceAuthModal(mode, options = {}) {
+		        const autoLogin = options.autoLogin === true;
+			        if (faceAuthTitle) {
+			          faceAuthTitle.textContent = "Login with face";
+			        }
+			        if (faceAuthHelp) {
+			          faceAuthHelp.textContent = autoLogin
+			            ? "Look at the camera clearly. We will sign you in automatically when your face is recognized."
+			            : "Look at the camera clearly. We will match you with an enrolled account.";
 	        }
+		        setFaceManualControlsVisible(!autoLogin);
+		        if (autoLogin) {
+		          faceAutoLoginActive = true;
+		          faceAutoNoFaceAttempts = 0;
+		        }
 	        setFaceAuthStatus("Opening camera...", "success");
 	        faceAuthModal.hidden = false;
 	        document.body.classList.add("modal-open");
 	        try {
 	          await startFaceCamera();
-	          setFaceAuthStatus("Camera ready. Center your face and capture.", "success");
+	          if (autoLogin) {
+	            setFaceAuthStatus("Camera ready. Recognizing your face...", "success");
+	            scheduleAutoFaceLogin(450);
+	          } else {
+	            setFaceAuthStatus("Camera ready. Center your face and capture.", "success");
+	          }
 	        } catch (error) {
+		          if (autoLogin) {
+		            stopFaceAutoLogin();
+		            setFaceManualControlsVisible(true);
+		          }
 	          setFaceAuthStatus(error.message || "Could not open the camera.", "error");
 	        }
 	      }
 
 	      function closeFaceAuthModalFlow() {
 	        if (!faceAuthModal) return;
+		        stopFaceAutoLogin();
 	        stopFaceCamera();
 	        faceAuthModal.hidden = true;
 	        document.body.classList.remove("modal-open");
@@ -1835,32 +1895,63 @@
 	        return images;
 	      }
 
-	      async function submitFaceAuth() {
+		      function scheduleAutoFaceLogin(delay = FACE_AUTO_RETRY_MS) {
+		        if (!faceAutoLoginActive) return;
+		        clearFaceAutoLoginTimer();
+		        faceAutoLoginTimer = window.setTimeout(() => {
+		          submitFaceAuth({ autoLogin: true });
+		        }, delay);
+		      }
+
+		      async function submitFaceAuth(options = {}) {
+		        const autoLogin = options.autoLogin === true;
+		        if (faceAuthSubmitting) return;
 	        try {
-	          captureFaceButton.disabled = true;
-	          setFaceAuthStatus("Capturing secure face samples...", "success");
-		          const images = await captureFaceImages(2);
+		          faceAuthSubmitting = true;
+		          if (captureFaceButton) {
+		            captureFaceButton.disabled = true;
+		          }
+	          setFaceAuthStatus(autoLogin ? "Recognizing face..." : "Capturing secure face samples...", "success");
+			          const images = await captureFaceImages(2);
 	          setFaceAuthStatus("Checking face...", "success");
 	          let data;
-		          data = await postJson(withBasePath("/api/auth/face/login"), { images });
+			          data = await postJson(withBasePath("/api/auth/face/login"), { images });
+		          stopFaceAutoLogin();
 	          setFaceAuthStatus(data.message || "Done.", "success");
 	          if (data.redirect_url) {
 	            window.location.href = data.redirect_url;
 	          }
 	        } catch (error) {
+		          if (autoLogin && faceAutoLoginActive && isRecoverableAutoFaceError(error)) {
+		            faceAutoNoFaceAttempts += 1;
+		            if (faceAutoNoFaceAttempts < FACE_AUTO_MAX_NO_FACE_ATTEMPTS) {
+		              setFaceAuthStatus(`${error.message} Retrying...`, "error");
+		              scheduleAutoFaceLogin();
+		              return;
+		            }
+		          }
+		          if (autoLogin) {
+		            stopFaceAutoLogin();
+		            setFaceManualControlsVisible(true);
+		          }
 	          setFaceAuthStatus(error.message, "error");
 	        } finally {
-	          captureFaceButton.disabled = false;
+		          faceAuthSubmitting = false;
+		          if (captureFaceButton) {
+		            captureFaceButton.disabled = false;
+		          }
 	        }
 	      }
 
 	      forgotPasswordTrigger?.addEventListener("click", openForgotPasswordModal);
 		      closeForgotPassword?.addEventListener("click", closeForgotPasswordModalFlow);
-		      faceLoginButton?.addEventListener("click", () => openFaceAuthModal("login"));
+			      faceLoginButton?.addEventListener("click", () => openFaceAuthModal("login", { autoLogin: false }));
 		      closeFaceAuth?.addEventListener("click", closeFaceAuthModalFlow);
 	      captureFaceButton?.addEventListener("click", submitFaceAuth);
 	      retryFaceButton?.addEventListener("click", async () => {
 	        try {
+		          stopFaceAutoLogin();
+		          setFaceManualControlsVisible(true);
 	          setFaceAuthStatus("Restarting camera...", "success");
 	          await startFaceCamera();
 	          setFaceAuthStatus("Camera ready. Center your face and capture.", "success");
@@ -1868,6 +1959,12 @@
 	          setFaceAuthStatus(error.message || "Could not restart the camera.", "error");
 	        }
 	      });
+		      window.addEventListener("load", () => {
+		        if (!FACE_AUTH_AUTO_LOGIN_ENABLED || !faceAuthModal || !faceVideo || !faceCanvas) return;
+		        window.setTimeout(() => {
+		          openFaceAuthModal("login", { autoLogin: true });
+		        }, 250);
+		      });
 	      forgotPasswordModal?.addEventListener("click", (event) => {
 	        if (event.target === forgotPasswordModal) {
 	          closeForgotPasswordModalFlow();
